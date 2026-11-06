@@ -35,6 +35,19 @@ A **clean-room** device manager that merges two worlds. Licensed under
 - [x] `udev_queue_*` seed in the daemon — monotonic udev seqnum + `/run/udev/queue` (SEQNUM / QUEUE_LENGTH); kernel seqnum read from `/sys/kernel/uevent_seqnum`
 - [x] **full libudev ABI (the 17 missing symbols) in the companion repo `libudev-standalone`** (route Y): `udev_queue_*` + `udev_device_*` + `udev_enumerate_*` + `udev_monitor_*` + `udev_list_entry_*`, drop-in linkable for Y-libudev. No libsystemd/libblkid dependency.
 
+## Status (milestone 12 — daemon→libudev end-to-end)
+
+- [x] `UDEV_RUNDIR` env override for all runtime state (device DB + queue), mirroring the
+      same variable `libudev-standalone` reads — one shared fake/test root surface
+- [x] `udev apply <uevent-file>` subcommand — process a synthetic uevent and **write the real
+      device DB + queue** (not just print), so a libudev client can read it without root/netlink
+- [x] rules directory resolved relative to the executable (and `/etc/udev/rules.d`), so the
+      daemon no longer depends on the caller's CWD
+- [x] device-node creation skipped in `apply`/`--test` mode (no `/dev` mutation), builtins still run
+- [x] **proven end-to-end**: `udev-standalone/test/` + `libudev-standalone/test/integration.sh`
+      runs the daemon `apply` then reads the produced DB with a libudev-only `udevinfo`
+      (by name and by devnum), asserting `ID_PATH`, `ID_FS_TYPE`, etc. — 9/9 checks pass
+
 ## Build & test
 
     make

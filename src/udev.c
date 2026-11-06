@@ -21,6 +21,13 @@
    drop-in compatibility with scripts/tools that expect udev's runtime layout. */
 #define UDEV_PIDFILE "/run/udev.pid"
 
+/* rundir: where the daemon persists its runtime state (device DB + queue).
+   This is the same env var libudev-standalone reads (UDEV_RUNDIR, default
+   /run/udev), so both projects share one test/fake-root surface for an
+   end-to-end daemon→libudev test without root or a real kernel netlink. */
+static char g_rundir[256];
+static const char *rundir(void){ return g_rundir[0] ? g_rundir : "/run/udev"; }
+
 /* ===================== uevent ===================== */
 #define UE_MAX_ENV 96
 #define UE_ENV_LEN 160
@@ -113,7 +120,7 @@ typedef struct {
 
 typedef struct { rule_t *r; int n, cap; } ruleset_t;
 static ruleset_t RS;
-static const char *g_rulesdir = "rules";
+static char g_rulesdir[512] = "rules";
 
 /* split "KEY OP VALUE" into pieces; OP is one of == != := += = */
 static int split_tok(const char *tok, char *key, char *op, char *val) {
@@ -405,6 +412,7 @@ static void cmd_hwdb_query(const char *modalias, int val_only) {
    systemd's net_id / path_id / blkid builtins emit. Invoked from rules via
    IMPORT{builtin}="name" (comma-separated list of names). */
 static int g_test = 0;   /* declared early so builtins can print in --test mode */
+static int g_apply = 0;  /* `udev apply`: process a uevent and WRITE the real DB/queue */
 
 /* scan the devpath for a PCI device component ("0000:00:03.0" or "00:03.0") */
 static int pci_ancestor(const char *dp, int *dom, int *bus, int *slot, int *fn) {
@@ -450,7 +458,7 @@ static void builtin_net_id(uevent_t *ue) {
    Builds a hyphen-joined topology chain: pci-<devaddr>[-usb-<func>:<bus>:<port>[:<cfg>.<if>]].
    PCI addressing is preserved verbatim (no re-formatting) so the path stays stable. */
 static void builtin_path_id(uevent_t *ue) {
-    char path[256]; path[0]=0;
+    char path[512]; path[0]=0;
     char tmp[384]; snprintf(tmp,sizeof tmp,"%s/",ue->devpath);
     char *save=NULL; int pci_func=-1;
     for (char *tok=strtok_r(tmp,"/",&save); tok; tok=strtok_r(NULL,"/",&save)) {
@@ -494,7 +502,7 @@ static void builtin_path_id(uevent_t *ue) {
 static void builtin_blkid(uevent_t *ue) {
     const char *dev = ue_getenv(ue,"DEVNAME");
     if (!dev) return;
-    char path[256];
+    char path[512];
     if (dev[0]=='/') snprintf(path,sizeof path,"%s",dev);
     else snprintf(path,sizeof path,"/dev/%s",dev);
     FILE *f=fopen(path,"rb"); if(!f){ if(g_test)printf("       IMPORT(builtin blkid): cannot open %s\n",path); return; }
@@ -582,17 +590,19 @@ static void apply_rule(rule_t *r, uevent_t *ue) {
     char path[512]; snprintf(path,sizeof path,"/dev/%s",ue->devname);
     const char *km = mode[0]? mode : ue_getenv(ue,"MODE");
     unsigned perm = km? (unsigned)strtol(km,NULL,8) : 0600;
-    printf("[udev] %s action=%s node=%s mode=%o owner=%s group=%s\n",
-        g_test?"TEST":"APPLY", ue->action, path, perm,
-        owner[0]?owner:"(kernel)", group[0]?group:"(kernel)");
-    if (linkname[0]) printf("       symlink -> /dev/%s\n", linkname);
-    if (ue->ntags) { printf("       tags:"); for(int t=0;t<ue->ntags;t++) printf(" %s",ue->tags[t]); printf("\n"); }
-    /* RUN: execute programs on the event (test mode only prints) */
+    if (!g_apply) {
+        printf("[udev] %s action=%s node=%s mode=%o owner=%s group=%s\n",
+            g_test?"TEST":"APPLY", ue->action, path, perm,
+            owner[0]?owner:"(kernel)", group[0]?group:"(kernel)");
+        if (linkname[0]) printf("       symlink -> /dev/%s\n", linkname);
+        if (ue->ntags) { printf("       tags:"); for(int t=0;t<ue->ntags;t++) printf(" %s",ue->tags[t]); printf("\n"); }
+    }
+    /* RUN: execute programs on the event (test mode only prints; apply mode skips) */
     for (int k=0;k<r->nrun;k++){
         if (g_test) printf("       [would RUN] %s\n", r->run[k]);
-        else run_exec(r->run[k]);
+        else if (!g_apply) run_exec(r->run[k]);
     }
-    if (g_test) return;
+    if (g_test || g_apply) return;   /* never mutate /dev in test/apply mode */
     char *slash=strrchr(path,'/');
     if (slash && slash!=path){ *slash=0; mkdir(path,0755); *slash='/'; }
     if (mknod(path, S_IFCHR|perm, makedev(ue->major,ue->minor))<0)
@@ -614,8 +624,8 @@ static void apply_rule(rule_t *r, uevent_t *ue) {
 static void db_write(uevent_t *ue) {
     if (g_test) return;
     if (ue->major==0 && ue->minor==0) return;
-    char path[256];
-    snprintf(path, sizeof path, "/run/udev/data/c%d:%d", ue->major, ue->minor);
+    char path[512];
+    snprintf(path, sizeof path, "%s/data/c%d:%d", rundir(), ue->major, ue->minor);
     FILE *f = fopen(path,"w");
     if (!f) return;
     for (int i=0;i<ue->nenv;i++) fprintf(f, "E:%s\n", ue->env[i]);
@@ -629,8 +639,8 @@ static void db_write(uevent_t *ue) {
 static void db_remove(uevent_t *ue) {
     if (g_test) return;
     if (ue->major==0 && ue->minor==0) return;
-    char path[256];
-    snprintf(path, sizeof path, "/run/udev/data/c%d:%d", ue->major, ue->minor);
+    char path[512];
+    snprintf(path, sizeof path, "%s/data/c%d:%d", rundir(), ue->major, ue->minor);
     unlink(path);
 }
 
@@ -675,7 +685,7 @@ static void on_sighup(int s){ (void)s; g_reload = 1; }
    kernel seqnum lives at /sys/kernel/uevent_seqnum (read by the lib directly). */
 static void queue_write_state(void) {
     if (g_test) return;
-    char path[256]; snprintf(path,sizeof path,"/run/udev/queue");
+    char path[512]; snprintf(path,sizeof path,"%s/queue",rundir());
     FILE *f=fopen(path,"w"); if(!f) return;
     fprintf(f,"SEQNUM=%d\n",g_seqnum);
     fprintf(f,"QUEUE_LENGTH=%d\n",g_pending);
@@ -708,7 +718,7 @@ static void cmd_settle(int timeout) {
     printf("settled (%d pending)\n", g_pending);
 }
 static void cmd_info(const char *dbkey) {
-    char path[256]; snprintf(path,sizeof path,"/run/udev/data/%s",dbkey);
+    char path[512]; snprintf(path,sizeof path,"%s/data/%s",rundir(),dbkey);
     FILE *f=fopen(path,"r"); if(!f){ printf("no DB entry for %s\n",dbkey); return; }
     char line[512];
     while (fgets(line,sizeof line,f)) fputs(line,stdout);
@@ -781,6 +791,30 @@ static int process_uevent(uevent_t *ue) {
     return matched;
 }
 
+/* Resolve the rules directory. An explicit --rules wins. Otherwise, if the
+   default relative name ("rules") is not present in the caller's CWD, look for a
+   copy next to the executable and then fall back to conventional system paths.
+   A real daemon is not launched from its own source tree, so it must not depend
+   on the caller's working directory to find its rules. */
+static void resolve_rules_dir(const char *argv0) {
+    struct stat st;
+    if (stat(g_rulesdir, &st) == 0 && S_ISDIR(st.st_mode)) return; /* cwd/rules ok */
+    if (strcmp(g_rulesdir,"rules") != 0) return;                  /* explicit, keep */
+    char *d = NULL;
+    if (argv0 && strchr(argv0,'/')) {
+        d = strdup(argv0);
+        char *sl = strrchr(d,'/'); if (sl) *sl = 0;
+        char cand[512];
+        snprintf(cand,sizeof cand,"%s/../rules",d);
+        if (stat(cand,&st)==0 && S_ISDIR(st.st_mode)) { snprintf(g_rulesdir,sizeof g_rulesdir,"%s",cand); free(d); return; }
+        snprintf(cand,sizeof cand,"%s/rules",d);
+        if (stat(cand,&st)==0 && S_ISDIR(st.st_mode)) { snprintf(g_rulesdir,sizeof g_rulesdir,"%s",cand); free(d); return; }
+        free(d);
+    }
+    if (stat("/etc/udev/rules.d",&st)==0 && S_ISDIR(st.st_mode))
+        snprintf(g_rulesdir,sizeof g_rulesdir,"/etc/udev/rules.d");
+}
+
 /* ===================== main ===================== */
 int main(int argc, char **argv) {
     const char *cmd = (argc>1 && argv[1][0]!='-') ? argv[1] : "daemon";
@@ -789,7 +823,7 @@ int main(int argc, char **argv) {
     const char *query=NULL; int val_only=0, do_update=0;
     for (int i = (strcmp(cmd,"daemon")==0)?1:2; i<argc; i++) {
         if(!strcmp(argv[i],"--test")){ test=1; if(i+1<argc) testfile=argv[++i]; }
-        else if(!strcmp(argv[i],"--rules")){ if(i+1<argc) g_rulesdir=argv[++i]; }
+        else if(!strcmp(argv[i],"--rules")){ if(i+1<argc) snprintf(g_rulesdir,sizeof g_rulesdir,"%s",argv[++i]); }
         else if(!strcmp(argv[i],"--subsystem")){ if(i+1<argc) subsys=argv[++i]; }
         else if(!strcmp(argv[i],"--timeout")){ if(i+1<argc) timeout=atoi(argv[++i]); }
         else if(!strcmp(argv[i],"--db")){ if(i+1<argc) dbkey=argv[++i]; }
@@ -803,6 +837,9 @@ int main(int argc, char **argv) {
         else if(!strcmp(argv[i],"--action")){ /* reserved */ }
     }
     g_test = test;
+    { const char *rd = getenv("UDEV_RUNDIR");
+      snprintf(g_rundir, sizeof g_rundir, "%s", rd ? rd : "/run/udev"); }
+    resolve_rules_dir(argv[0]);
     load_dir(g_rulesdir);
     hwdb_load_all();
 
@@ -828,6 +865,38 @@ int main(int argc, char **argv) {
                ue.action, ue.subsys, ue.devname, ue.devpath);
         int matched = process_uevent(&ue);
         printf("[udev] %d rule(s) matched\n", matched);
+        return 0;
+    }
+
+    /* `udev apply <uevent-file>` — process a synthetic uevent and WRITE the real
+       device DB + queue (not just print), so a libudev client (route Y) can read it.
+       This is the daemon-side producer for an end-to-end test that needs no root or
+       a live kernel netlink: feed a sample uevent, then inspect the resulting
+       /run/udev/data/cMAJ:MIN with any libudev-based tool. Honors UDEV_RUNDIR. */
+    if (!strcmp(cmd,"apply")) {
+        if (argc < 3) { fprintf(stderr, "usage: udev apply <uevent-file>\n"); return 1; }
+        const char *f = argv[2];
+        FILE *af = fopen(f, "rb");
+        if (!af) { fprintf(stderr, "cannot open %s\n", f); return 1; }
+        char buf[8192];
+        size_t rn = fread(buf, 1, sizeof buf - 1, af);
+        fclose(af);
+        if (rn <= 0) { fprintf(stderr, "empty uevent file\n"); return 1; }
+        for (size_t i = 0; i < rn; i++) if (buf[i] == '\n') buf[i] = 0;
+        buf[rn] = 0;
+        uevent_t ue;
+        if (ue_parse(buf, (ssize_t)rn, &ue) < 0) { fprintf(stderr, "failed to parse uevent\n"); return 1; }
+        char dd[320]; snprintf(dd, sizeof dd, "%s/data", rundir());
+        mkdir(rundir(), 0755); mkdir(dd, 0755);
+        g_test = 0; g_apply = 1;
+        int matched = process_uevent(&ue);
+        if (ue.major || ue.minor)
+            printf("[udev] apply: wrote %s/data/c%d:%d (%d rule(s) matched)\n",
+                   rundir(), ue.major, ue.minor, matched);
+        else
+            printf("[udev] apply: uevent has no MAJOR/MINOR — device DB not written "
+                   "(%d rule(s) matched)\n", matched);
+        printf("[udev] apply: queue state -> %s/queue (SEQNUM=%d)\n", rundir(), g_seqnum);
         return 0;
     }
 
