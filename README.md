@@ -21,13 +21,15 @@ A **clean-room** device manager that merges two worlds. Licensed under
 - [ ] `udev_queue_*` seqnum state machine
 - [x] rules.d directory loading (lexical merge of `*.rules`)
 - [x] `ATTR{}` match, `SYMLINK` create, `TAG` record (udev_enumerate ready)
-- [ ] live reload on `SIGHUP`
+- [x] **unified `udev` binary** — daemon + admin tool (`trigger`/`settle`/`info`/`control`) in one
+- [x] live reload on `SIGHUP` (+ `/run/udev.pid`)
+- [x] pending-event counter (seed of the `udev_queue_*` state machine)
 - [ ] `IMPORT`/`GOTO`/`LABEL`/`RUN`/`PROGRAM`
 - [ ] hwdb lookups, builtins (net_id / path_id / blkid)
-- [ ] `udev_queue_*` seqnum state machine (the 17 symbols Y-libudev needs)
+- [ ] full `udev_queue_*` seqnum state machine (the 17 symbols Y-libudev needs)
 
 ## Build & test
 
     make
-    ./udevd --test test/uevent-sample.txt   # parse + rules, no root needed
-    sudo ./udevd                            # real daemon (needs CAP_NET_ADMIN)
+    ./udev --test test/uevent-sample.txt    # parse + rules, no root needed
+    sudo ./udev                             # real daemon (needs CAP_NET_ADMIN)

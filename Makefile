@@ -1,10 +1,10 @@
 CC ?= cc
 CFLAGS ?= -O2 -Wall -Wextra -std=c99
 
-udevd: src/udevd.c
-	$(CC) $(CFLAGS) -o udevd src/udevd.c
+udev: src/udev.c
+	$(CC) $(CFLAGS) -o udev src/udev.c
 
 clean:
-	rm -f udevd
+	rm -f udev
 
 .PHONY: clean

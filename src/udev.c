@@ -4,6 +4,8 @@
 #include <string.h>
 #include <unistd.h>
 #include <errno.h>
+#include <signal.h>
+#include <time.h>
 #include <sys/socket.h>
 #include <linux/netlink.h>
 #include <sys/stat.h>
@@ -95,6 +97,7 @@ typedef struct {
 
 typedef struct { rule_t *r; int n, cap; } ruleset_t;
 static ruleset_t RS;
+static const char *g_rulesdir = "rules";
 
 /* split "KEY OP VALUE" into pieces; OP is one of == != := += = */
 static int split_tok(const char *tok, char *key, char *op, char *val) {
@@ -143,7 +146,6 @@ static void load_dir(const char *dir) {
         free(names[i]);
     }
 }
-
 static void load_file(const char *path) {
     FILE *f = fopen(path,"r"); if (!f) return;
     char line[1024];
@@ -179,6 +181,10 @@ static void load_file(const char *path) {
     }
     fclose(f);
 }
+static void rules_reload(const char *dir) {
+    free(RS.r); RS.r=NULL; RS.n=0; RS.cap=0;
+    load_dir(dir);
+}
 
 static const char *kernel_name(uevent_t *ue) {
     const char *b = strrchr(ue->devpath,'/'); return b? b+1 : ue->devpath;
@@ -192,7 +198,7 @@ static int tok_matches(const char *key, const char *op, const char *val, uevent_
         char ek[64]; snprintf(ek,sizeof ek,"%s",key+4);
         char *c=strchr(ek,'}'); if(c)*c=0;
         actual=ue_getenv(ue,ek);
-    }     else if (!strncmp(key,"ATTR{",5)) {
+    } else if (!strncmp(key,"ATTR{",5)) {
         char ak[128]; snprintf(ak,sizeof ak,"%s",key+5);
         char *c=strchr(ak,'}'); if(c)*c=0;
         static char buf[256];
@@ -227,16 +233,16 @@ static void apply_rule(rule_t *r, uevent_t *ue) {
     char path[512]; snprintf(path,sizeof path,"/dev/%s",ue->devname);
     const char *km = mode[0]? mode : ue_getenv(ue,"MODE");
     unsigned perm = km? (unsigned)strtol(km,NULL,8) : 0600;
-    printf("[udevd] %s action=%s node=%s mode=%o owner=%s group=%s\n",
+    printf("[udev] %s action=%s node=%s mode=%o owner=%s group=%s\n",
         g_test?"TEST":"APPLY", ue->action, path, perm,
         owner[0]?owner:"(kernel)", group[0]?group:"(kernel)");
-    if (linkname[0]) printf("        symlink -> /dev/%s\n", linkname);
-    if (ue->ntags) { printf("        tags:"); for(int t=0;t<ue->ntags;t++) printf(" %s",ue->tags[t]); printf("\n"); }
+    if (linkname[0]) printf("       symlink -> /dev/%s\n", linkname);
+    if (ue->ntags) { printf("       tags:"); for(int t=0;t<ue->ntags;t++) printf(" %s",ue->tags[t]); printf("\n"); }
     if (g_test) return;
     char *slash=strrchr(path,'/');
     if (slash && slash!=path){ *slash=0; mkdir(path,0755); *slash='/'; }
     if (mknod(path, S_IFCHR|perm, makedev(ue->major,ue->minor))<0)
-        printf("        mknod failed: %s\n", strerror(errno));
+        printf("       mknod failed: %s\n", strerror(errno));
     else {
         uid_t u=0; gid_t g=0;
         if(owner[0]){ struct passwd *pw=getpwnam(owner); if(pw) u=pw->pw_uid; }
@@ -250,7 +256,31 @@ static void apply_rule(rule_t *r, uevent_t *ue) {
     }
 }
 
-/* ===================== netlink ===================== */
+/* ===================== device DB ===================== */
+static void db_write(uevent_t *ue) {
+    if (g_test) return;
+    if (ue->major==0 && ue->minor==0) return;
+    char path[256];
+    snprintf(path, sizeof path, "/run/udev/data/c%d:%d", ue->major, ue->minor);
+    FILE *f = fopen(path,"w");
+    if (!f) return;
+    for (int i=0;i<ue->nenv;i++) fprintf(f, "E:%s\n", ue->env[i]);
+    if (ue->ntags) {
+        fprintf(f, "E:TAGS=");
+        for (int t=0;t<ue->ntags;t++) fprintf(f, "%s%s", t?",":"", ue->tags[t]);
+        fprintf(f, "\n");
+    }
+    fclose(f);
+}
+static void db_remove(uevent_t *ue) {
+    if (g_test) return;
+    if (ue->major==0 && ue->minor==0) return;
+    char path[256];
+    snprintf(path, sizeof path, "/run/udev/data/c%d:%d", ue->major, ue->minor);
+    unlink(path);
+}
+
+/* ===================== netlink + monitor ===================== */
 static int netlink_setup(void) {
     int fd = socket(AF_NETLINK, SOCK_RAW, NETLINK_KOBJECT_UEVENT);
     if (fd<0) return -1;
@@ -280,68 +310,132 @@ static void monitor_send(const char *buf, ssize_t len) {
     sendto(monitor_fd, buf, (size_t)len, 0, (struct sockaddr*)&dst, sizeof dst);
 }
 
-/* persistent device database, udev-compatible layout under /run/udev/data/ */
-static void db_write(uevent_t *ue) {
-    if (g_test) return;
-    if (ue->major==0 && ue->minor==0) return;
-    char path[256];
-    snprintf(path, sizeof path, "/run/udev/data/c%d:%d", ue->major, ue->minor);
-    FILE *f = fopen(path,"w");
-    if (!f) return;
-    for (int i=0;i<ue->nenv;i++) fprintf(f, "E:%s\n", ue->env[i]);
-    if (ue->ntags) {
-        fprintf(f, "E:TAGS=");
-        for (int t=0;t<ue->ntags;t++) fprintf(f, "%s%s", t?",":"", ue->tags[t]);
-        fprintf(f, "\n");
+/* ===================== queue state (seed for udev_queue_*) ===================== */
+static volatile int g_pending = 0;
+static volatile int g_reload = 0;
+static void on_sighup(int s){ (void)s; g_reload = 1; }
+
+/* ===================== admin subcommands ===================== */
+/* re-trigger: walk /sys/devices and write "add" into every uevent file */
+static void trigger_walk(const char *dir) {
+    DIR *d = opendir(dir); if(!d) return;
+    struct dirent *e;
+    while ((e=readdir(d))) {
+        if (!strcmp(e->d_name,".") || !strcmp(e->d_name,"..")) continue;
+        char path[512]; snprintf(path,sizeof path,"%s/%s",dir,e->d_name);
+        struct stat st; if (stat(path,&st)<0) continue;
+        if (S_ISDIR(st.st_mode)) {
+            char uev[600]; snprintf(uev,sizeof uev,"%s/uevent",path);
+            if (access(uev,F_OK)==0) { FILE *f=fopen(uev,"w"); if(f){ fputs("add\n",f); fclose(f); } }
+            trigger_walk(path);
+        }
     }
+    closedir(d);
+}
+static void cmd_settle(int timeout) {
+    time_t start=time(NULL);
+    while (g_pending>0) {
+        if (time(NULL)-start >= timeout) { fprintf(stderr,"settle: timeout (%ds)\n",timeout); return; }
+        usleep(50000);
+    }
+    printf("settled (%d pending)\n", g_pending);
+}
+static void cmd_info(const char *dbkey) {
+    char path[256]; snprintf(path,sizeof path,"/run/udev/data/%s",dbkey);
+    FILE *f=fopen(path,"r"); if(!f){ printf("no DB entry for %s\n",dbkey); return; }
+    char line[512];
+    while (fgets(line,sizeof line,f)) fputs(line,stdout);
     fclose(f);
 }
-static void db_remove(uevent_t *ue) {
-    if (g_test) return;
-    if (ue->major==0 && ue->minor==0) return;
-    char path[256];
-    snprintf(path, sizeof path, "/run/udev/data/c%d:%d", ue->major, ue->minor);
-    unlink(path);
+static void cmd_control(const char *action) {
+    if (!strcmp(action,"reload")) {
+        FILE *p=fopen("/run/udev.pid","r");
+        if(p){ int pid; fscanf(p,"%d",&pid); fclose(p); kill(pid,SIGHUP); printf("sent SIGHUP to %d\n",pid); }
+        else printf("no daemon pidfile (/run/udev.pid)\n");
+    } else printf("unknown control action: %s\n",action);
 }
 
 /* ===================== main ===================== */
 int main(int argc, char **argv) {
-    int test=0; const char *testfile=NULL; const char *rulesdir="rules";
-    for (int i=1;i<argc;i++){
+    const char *cmd = (argc>1 && argv[1][0]!='-') ? argv[1] : "daemon";
+    int test=0; const char *testfile=NULL, *subsys=NULL, *dbkey=NULL, *ctlact="reload";
+    int timeout=120;
+    for (int i = (strcmp(cmd,"daemon")==0)?1:2; i<argc; i++) {
         if(!strcmp(argv[i],"--test")){ test=1; if(i+1<argc) testfile=argv[++i]; }
-        else if(!strcmp(argv[i],"--rules")){ if(i+1<argc) rulesdir=argv[++i]; }
+        else if(!strcmp(argv[i],"--rules")){ if(i+1<argc) g_rulesdir=argv[++i]; }
+        else if(!strcmp(argv[i],"--subsystem")){ if(i+1<argc) subsys=argv[++i]; }
+        else if(!strcmp(argv[i],"--timeout")){ if(i+1<argc) timeout=atoi(argv[++i]); }
+        else if(!strcmp(argv[i],"--db")){ if(i+1<argc) dbkey=argv[++i]; }
+        else if(!strcmp(argv[i],"--action")){ /* reserved */ }
     }
     g_test = test;
-    load_dir(rulesdir);
+    load_dir(g_rulesdir);
 
+    /* --test: parse a sample uevent file and run the rule engine, then exit.
+       This MUST run before the daemon/trigger branches below, otherwise a bare
+       `udev --test` (where argv[1] starts with '-' and cmd defaults to
+       "daemon") would fall into the netlink recv() loop and hang. */
     if (test) {
-        FILE *f = testfile? fopen(testfile,"r") : stdin;
-        if (!f){ perror("test file"); return 1; }
-        char buf[8192]; size_t total=0; int c;
-        /* convert newlines to NULs so the file uses the kernel uevent layout */
-        while ((c=fgetc(f))!=EOF && total<sizeof buf-1) { if(c=='\n') c='\0'; buf[total++]=(char)c; }
-        fclose(f);
-        uevent_t ue; ue_parse(buf,total,&ue);
-        printf("action=%s devpath=%s subsys=%s devname=%s major=%d minor=%d\n",
-               ue.action,ue.devpath,ue.subsys,ue.devname,ue.major,ue.minor);
-        int matched=0;
-        for (int i=0;i<RS.n;i++) if (rule_matches(&RS.r[i],&ue)) {
-            matched++; printf("  matched rule #%d\n",i); apply_rule(&RS.r[i],&ue);
-        }
-        if(!matched) printf("  (no rule matched)\n");
+        if (!testfile) { fprintf(stderr, "usage: udev --test <uevent-file>\n"); return 1; }
+        FILE *tf = fopen(testfile, "rb");
+        if (!tf) { fprintf(stderr, "cannot open test file: %s\n", testfile); return 1; }
+        char buf[8192];
+        size_t rn = fread(buf, 1, sizeof buf - 1, tf);
+        fclose(tf);
+        if (rn <= 0) { fprintf(stderr, "empty test file\n"); return 1; }
+        /* normalize: a convenient newline-separated sample is treated the same
+           as the kernel's NUL-separated uevent format */
+        for (size_t i = 0; i < rn; i++) if (buf[i] == '\n') buf[i] = 0;
+        buf[rn] = 0;
+        uevent_t ue;
+        if (ue_parse(buf, (ssize_t)rn, &ue) < 0) { fprintf(stderr, "failed to parse uevent\n"); return 1; }
+        printf("[udev] test uevent: action=%s subsys=%s devname=%s devpath=%s\n",
+               ue.action, ue.subsys, ue.devname, ue.devpath);
+        int matched = 0;
+        for (int i = 0; i < RS.n; i++)
+            if (rule_matches(&RS.r[i], &ue)) { apply_rule(&RS.r[i], &ue); matched++; }
+        printf("[udev] %d rule(s) matched\n", matched);
         return 0;
     }
 
-    int fd = netlink_setup();
-    if (fd<0){ perror("netlink setup (need root/CAP_NET_ADMIN)"); return 1; }
-    if (monitor_setup() < 0) fprintf(stderr, "warning: monitor rebroadcast unavailable\n");
-    char buf[8192];
-    for (;;) {
-        ssize_t n = recv(fd,buf,sizeof buf-1,0);
-        if (n<=0) continue;
-        uevent_t ue; if (ue_parse(buf,n,&ue)<0) continue;
-        for (int i=0;i<RS.n;i++) if (rule_matches(&RS.r[i],&ue)) apply_rule(&RS.r[i],&ue);
-        monitor_send(buf, n);
-        if (!strcmp(ue.action,"remove")) db_remove(&ue); else db_write(&ue);
+    if (!strcmp(cmd,"daemon")) {
+        signal(SIGHUP, on_sighup);
+        int fd = netlink_setup();
+        if (fd<0){ perror("netlink setup (need root/CAP_NET_ADMIN)"); return 1; }
+        if (monitor_setup() < 0) fprintf(stderr, "warning: monitor rebroadcast unavailable\n");
+        if (geteuid()==0){ FILE *pf=fopen("/run/udev.pid","w"); if(pf){ fprintf(pf,"%d",getpid()); fclose(pf); } }
+        char buf[8192];
+        for (;;) {
+            ssize_t n = recv(fd,buf,sizeof buf-1,0);
+            if (n<=0) continue;
+            uevent_t ue; if (ue_parse(buf,n,&ue)<0) continue;
+            int is_add = strcmp(ue.action,"remove")!=0;
+            if (is_add) g_pending++;
+            for (int i=0;i<RS.n;i++) if (rule_matches(&RS.r[i],&ue)) apply_rule(&RS.r[i],&ue);
+            monitor_send(buf, n);
+            if (!strcmp(ue.action,"remove")) db_remove(&ue); else db_write(&ue);
+            if (is_add && g_pending>0) g_pending--;
+            if (g_reload) { rules_reload(g_rulesdir); g_reload=0; fprintf(stderr,"rules reloaded\n"); }
+        }
+    } else if (!strcmp(cmd,"trigger")) {
+        if (test) { printf("[trigger dry-run] would walk /sys/devices and write 'add' to uevent files (subsys=%s)\n", subsys?subsys:"*"); return 0; }
+        trigger_walk("/sys/devices");
+        printf("trigger done\n");
+        return 0;
+    } else if (!strcmp(cmd,"settle")) {
+        cmd_settle(timeout);
+        return 0;
+    } else if (!strcmp(cmd,"info")) {
+        if(!dbkey){ fprintf(stderr,"usage: udev info --db=cMAJ:MIN\n"); return 1; }
+        cmd_info(dbkey);
+        return 0;
+    } else if (!strcmp(cmd,"control")) {
+        cmd_control(ctlact);
+        return 0;
+    } else {
+        fprintf(stderr,"unknown command: %s\n",cmd);
+        fprintf(stderr,"usage: udev [daemon|trigger|settle|info|control] [options]\n");
+        return 1;
     }
+    return 0;
 }
