@@ -32,7 +32,8 @@ A **clean-room** device manager that merges two worlds. Licensed under
 - [x] builtin dispatch (`IMPORT{builtin}="name"`) + `net_id` (ID_NET_NAME_PATH / ID_NET_NAME_MAC)
 - [x] builtin `path_id` (ID_PATH / ID_PATH_TAG from PCI+USB topology)
 - [x] builtin `blkid` (ID_FS_TYPE via magic sniff; ext4 UUID/label) — no libblkid dependency
-- [ ] full `udev_queue_*` seqnum state machine (the 17 symbols Y-libudev needs)
+- [x] `udev_queue_*` seed in the daemon — monotonic udev seqnum + `/run/udev/queue` (SEQNUM / QUEUE_LENGTH); kernel seqnum read from `/sys/kernel/uevent_seqnum`
+- [x] **full libudev ABI (the 17 missing symbols) in the companion repo `libudev-standalone`** (route Y): `udev_queue_*` + `udev_device_*` + `udev_enumerate_*` + `udev_monitor_*` + `udev_list_entry_*`, drop-in linkable for Y-libudev. No libsystemd/libblkid dependency.
 
 ## Build & test
 
