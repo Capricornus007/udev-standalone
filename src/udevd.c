@@ -10,6 +10,7 @@
 #include <sys/sysmacros.h>
 #include <pwd.h>
 #include <grp.h>
+#include <dirent.h>
 
 /* ===================== uevent ===================== */
 #define UE_MAX_ENV 96
@@ -108,6 +109,29 @@ static int split_tok(const char *tok, char *key, char *op, char *val) {
 static void rules_add(rule_t *r) {
     if (RS.n >= RS.cap) { RS.cap = RS.cap? RS.cap*2 : 16; RS.r = realloc(RS.r, RS.cap*sizeof(rule_t)); }
     RS.r[RS.n++] = *r;
+}
+
+static void load_file(const char *path);
+static int cmp_str(const void *a, const void *b) {
+    return strcmp(*(const char * const *)a, *(const char * const *)b);
+}
+static void load_dir(const char *dir) {
+    DIR *d = opendir(dir); if (!d) return;
+    char *names[256]; int n=0;
+    struct dirent *e;
+    while ((e = readdir(d)) && n<256) {
+        size_t L = strlen(e->d_name);
+        if (L>6 && !strcmp(e->d_name+L-6, ".rules"))
+            names[n++] = strdup(e->d_name);
+    }
+    closedir(d);
+    qsort(names, n, sizeof(char*), cmp_str);
+    char path[512];
+    for (int i=0;i<n;i++) {
+        snprintf(path,sizeof path,"%s/%s",dir,names[i]);
+        load_file(path);
+        free(names[i]);
+    }
 }
 
 static void load_file(const char *path) {
@@ -254,12 +278,13 @@ static void db_remove(uevent_t *ue) {
 
 /* ===================== main ===================== */
 int main(int argc, char **argv) {
-    int test=0; const char *testfile=NULL;
+    int test=0; const char *testfile=NULL; const char *rulesdir="rules";
     for (int i=1;i<argc;i++){
         if(!strcmp(argv[i],"--test")){ test=1; if(i+1<argc) testfile=argv[++i]; }
+        else if(!strcmp(argv[i],"--rules")){ if(i+1<argc) rulesdir=argv[++i]; }
     }
     g_test = test;
-    load_file("rules/example.rules"); /* milestone: load full dir later */
+    load_dir(rulesdir);
 
     if (test) {
         FILE *f = testfile? fopen(testfile,"r") : stdin;

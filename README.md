@@ -19,9 +19,10 @@ A **clean-room** device manager that merges two worlds. Licensed under
 - [x] netlink monitor rebroadcast (multicast group 4, for libudev clients)
 - [x] persistent device DB (`/run/udev/data/cMAJ:MIN`, udev-compatible layout)
 - [ ] `udev_queue_*` seqnum state machine
+- [x] rules.d directory loading (lexical merge of `*.rules`)
+- [ ] live reload on `SIGHUP`
 - [ ] `ATTR{}`/`IMPORT`/`GOTO`/`LABEL`/`SYMLINK`/`RUN`/`PROGRAM`
 - [ ] hwdb lookups, builtins (net_id / path_id / blkid)
-- [ ] rules.d directory loading + live reload (`SIGHUP`)
 
 ## Build & test
 
