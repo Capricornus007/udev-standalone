@@ -3,6 +3,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <ctype.h>
 #include <errno.h>
 #include <signal.h>
 #include <time.h>
@@ -398,8 +399,59 @@ static void cmd_hwdb_query(const char *modalias, int val_only) {
     if (!found) printf("(no hwdb match for %s)\n", modalias);
 }
 
+/* ===================== builtins =====================
+   Clean-room reimplementations of a subset of udev's builtins. They compute
+   device properties (the ID_* keys) from the uevent + sysfs, mirroring what
+   systemd's net_id / path_id / blkid builtins emit. Invoked from rules via
+   IMPORT{builtin}="name" (comma-separated list of names). */
+static int g_test = 0;   /* declared early so builtins can print in --test mode */
+
+/* scan the devpath for a PCI device component ("0000:00:03.0" or "00:03.0") */
+static int pci_ancestor(const char *dp, int *dom, int *bus, int *slot, int *fn) {
+    *dom=*bus=*slot=*fn=0; int found=0;
+    char tmp[384]; snprintf(tmp,sizeof tmp,"%s/",dp);
+    char *save=NULL;
+    for (char *tok=strtok_r(tmp,"/",&save); tok; tok=strtok_r(NULL,"/",&save)) {
+        if (strchr(tok,':') && !strstr(tok,"pci")) {       /* skip "pci0000:00" host bridge */
+            int d,b,s,f;
+            if (sscanf(tok,"%x:%x:%x.%x",&d,&b,&s,&f)==4){ *dom=d;*bus=b;*slot=s;*fn=f;found=1; }
+            else if (sscanf(tok,"%x:%x.%x",&b,&s,&f)==3){ *bus=b;*slot=s;*fn=f;found=1; }
+        }
+    }
+    return found;
+}
+
+/* net_id: predictable network interface names.
+   - ID_NET_NAME_PATH from PCI topology (enp<bus>s<slot>[f<func>]); multi-domain
+     prefix as enp<bus>s<slot> is sufficient for the common single-domain case.
+   - ID_NET_NAME_MAC from the device address (sysfs "address", or a MAC= env in
+     --test). ONBOARD/SLOT names need firmware (BIOS/SMBIOS) data we don't read. */
+static void builtin_net_id(uevent_t *ue) {
+    int dom,bus,slot,fn;
+    if (pci_ancestor(ue->devpath,&dom,&bus,&slot,&fn)) {
+        char name[64];
+        snprintf(name,sizeof name,"enp%ds%d",bus,slot);
+        if (fn) { size_t l=strlen(name); snprintf(name+l,sizeof name-l,"f%d",fn); }
+        ue_setenv(ue,"ID_NET_NAME_PATH",name);
+        if (g_test) printf("       IMPORT(builtin net_id) ID_NET_NAME_PATH=%s\n",name);
+    }
+    const char *mac = ue_getenv(ue,"MAC");
+    char buf[64];
+    if (!mac) mac = read_sysattr(ue,"address",buf,sizeof buf);
+    if (mac) {
+        char norm[16]; int ni=0;
+        for (const unsigned char *c=(const unsigned char*)mac; *c && ni<12; c++)
+            if (isxdigit(*c)) norm[ni++]=tolower(*c);
+        if (ni==12){ char nm[32]; snprintf(nm,sizeof nm,"enx%s",norm); ue_setenv(ue,"ID_NET_NAME_MAC",nm); if(g_test)printf("       IMPORT(builtin net_id) ID_NET_NAME_MAC=%s\n",nm); }
+    }
+}
+
+static void run_builtin(uevent_t *ue, const char *name) {
+    if (!strcmp(name,"net_id")) builtin_net_id(ue);
+    /* path_id / blkid: not yet implemented (milestone 9/10) */
+}
+
 /* ===================== actions ===================== */
-static int g_test=0;
 static void apply_rule(rule_t *r, uevent_t *ue) {
     char mode[16]="", owner[64]="", group[64]="", linkname[160]="";
     ue->ntags = 0;
@@ -436,6 +488,10 @@ static void apply_rule(rule_t *r, uevent_t *ue) {
                     }
                 }
             } else if (g_test) printf("       IMPORT(hwdb): no MODALIAS in uevent\n");
+        } else if (!strcmp(r->imp_kind[k],"builtin")) {
+            char names[160]; snprintf(names,sizeof names,"%s",r->imp_val[k]);
+            char *save=NULL;
+            for (char *b=strtok_r(names,",",&save); b; b=strtok_r(NULL,",",&save)) run_builtin(ue,b);
         } else {
             char buf[1024];
             if (run_capture(r->imp_val[k],buf,sizeof buf)==0 && buf[0]){

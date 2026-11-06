@@ -1,0 +1,2 @@
+# builtin demo: compute predictable network names via the net_id builtin
+SUBSYSTEM=="net", IMPORT{builtin}="net_id"
