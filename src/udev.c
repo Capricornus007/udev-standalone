@@ -16,6 +16,7 @@
 #include <pwd.h>
 #include <grp.h>
 #include <dirent.h>
+#include <limits.h>
 
 /* pidfile: conventional udev location. On the target systemd-free system there
    is nothing else to collide with, and keeping the standard path maximizes
@@ -685,14 +686,24 @@ static void apply_event(uevent_t *ue) {
         char *slash=strrchr(path,'/');
         if (slash && slash!=path){ *slash=0; mkdir(path,0755); *slash='/'; }
         mode_t ntype = !strcmp(ue->subsys,"block") ? S_IFBLK : S_IFCHR;
-        if (mknod(path, ntype|perm, makedev(ue->major,ue->minor))<0) {
+        int created = (mknod(path, ntype|perm, makedev(ue->major,ue->minor))==0);
+        if (!created) {
             if (g_apply) {
                 /* not root in the fake-root test: leave a placeholder file so the node
                    path exists for stat-based clients / inspection */
                 FILE *pf=fopen(path,"w"); if(pf) fclose(pf);
-            } else
+            } else if (errno==EEXIST) {
+                /* devtmpfs (or an earlier coldplug pass) already made the node.
+                   Fixing up an existing node is udev's core job: MODE/GROUP/OWNER
+                   rules MUST still land on it, or /dev stays at kernel defaults
+                   (0600 root:root) and nothing user-facing works. */
+                chmod(path, perm);
+                created = 1;   /* fall through to the chown below */
+            } else {
                 printf("       mknod failed: %s\n", strerror(errno));
-        } else if (!g_apply) {
+            }
+        }
+        if (created && !g_apply) {
             uid_t u=0; gid_t g=0;
             if(ue->owner[0]){ struct passwd *pw=getpwnam(ue->owner); if(pw) u=pw->pw_uid; }
             if(ue->group[0]){ struct group *gr=getgrnam(ue->group); if(gr) g=gr->gr_gid; }
@@ -956,16 +967,41 @@ static void cmd_info(const char *dbkey, const char *mode, const char *arg) {
 /* Only signal a daemon that is actually this binary. On a system that still
    carries another udev implementation, /run/udev.pid belongs to it; refusing to
    touch it keeps a migration/test session from disrupting the running system. */
-static int standalone_daemon_pid(void) {
-    FILE *p=fopen(UDEV_PIDFILE,"r");
-    if(!p) return 0;
-    int pid=0; int ok=(fscanf(p,"%d",&pid)==1); fclose(p);
-    if(!ok || pid<=0) return 0;
+static int pid_is_this_elf(int pid) {
+    /* Prefer an exact identity check: the daemon is the *same ELF* we are, just
+       invoked under another personality name (udevd/udevadm/udev-hwdb). */
+    char target[64], self[PATH_MAX], buf[PATH_MAX];
+    snprintf(target,sizeof target,"/proc/%d/exe",pid);
+    ssize_t n=readlink(target,buf,sizeof buf);
+    ssize_t m=readlink("/proc/self/exe",self,sizeof self);
+    if(n>0 && m>0){ buf[n]=0; self[m]=0; return strcmp(self,buf)==0; }
+    /* readlink fails for another user's process without privilege: fall back to
+       the personality names this binary answers to. A foreign implementation
+       (e.g. the host's systemd-udevd) is caught by the comm check below. */
     char cpath[64], comm[32]="";
     snprintf(cpath,sizeof cpath,"/proc/%d/comm",pid);
     FILE *c=fopen(cpath,"r");
     if(c){ if(fscanf(c,"%31s",comm)!=1) comm[0]=0; fclose(c); }
-    if(strcmp(comm,"udev")) {
+    return !strcmp(comm,"udevd") || !strcmp(comm,"udev");
+}
+static const char *pidfile_path(void) {
+    /* Production uses the conventional /run/udev.pid; UDEV_PIDFILE overrides it so
+       an unprivileged smoke test can drive control --reload/--exit end to end. */
+    static char p[PATH_MAX];
+    const char *e = getenv("UDEV_PIDFILE");
+    snprintf(p,sizeof p,"%s", e && *e ? e : UDEV_PIDFILE);
+    return p;
+}
+static int standalone_daemon_pid(void) {
+    FILE *p=fopen(pidfile_path(),"r");
+    if(!p) return 0;
+    int pid=0; int ok=(fscanf(p,"%d",&pid)==1); fclose(p);
+    if(!ok || pid<=0) return 0;
+    if(!pid_is_this_elf(pid)) {
+        char cpath[64], comm[64]="";
+        snprintf(cpath,sizeof cpath,"/proc/%d/comm",pid);
+        FILE *c=fopen(cpath,"r");
+        if(c){ if(fscanf(c,"%63s",comm)!=1) comm[0]=0; fclose(c); }
         printf("refusing to signal pid %d (comm '%s', not this daemon)\n",pid,comm);
         return 0;
     }
@@ -975,11 +1011,11 @@ static void cmd_control(const char *action) {
     if (!strcmp(action,"reload")) {
         int pid=standalone_daemon_pid();
         if(pid>0){ if(kill(pid,SIGHUP)==0) printf("sent SIGHUP to %d\n",pid); else perror("kill"); }
-        else printf("no standalone daemon pidfile (%s)\n", UDEV_PIDFILE);
+        else printf("no standalone daemon pidfile (%s)\n", pidfile_path());
     } else if (!strcmp(action,"exit")) {
         int pid=standalone_daemon_pid();
         if(pid>0){ if(kill(pid,SIGTERM)==0) printf("sent SIGTERM to %d\n",pid); else perror("kill"); }
-        else printf("no standalone daemon pidfile (%s)\n", UDEV_PIDFILE);
+        else printf("no standalone daemon pidfile (%s)\n", pidfile_path());
     } else printf("unknown control action: %s\n",action);
 }
 
@@ -1363,7 +1399,7 @@ int main(int argc, char **argv) {
         int fd = netlink_setup();
         if (fd<0){ perror("netlink setup (need root/CAP_NET_ADMIN)"); return 1; }
         if (monitor_setup() < 0) fprintf(stderr, "warning: monitor rebroadcast unavailable\n");
-        if (geteuid()==0){ FILE *pf=fopen(UDEV_PIDFILE,"w"); if(pf){ fprintf(pf,"%d",getpid()); fclose(pf); } }
+        if (geteuid()==0 || getenv("UDEV_PIDFILE")){ FILE *pf=fopen(pidfile_path(),"w"); if(pf){ fprintf(pf,"%d",getpid()); fclose(pf); } }
         char buf[8192];
         while (!g_stop) {
             ssize_t n = recv(fd,buf,sizeof buf-1,0);
@@ -1373,7 +1409,7 @@ int main(int argc, char **argv) {
             monitor_send(buf, n);
             if (g_reload) { rules_reload(g_rulesdir); g_reload=0; fprintf(stderr,"rules reloaded\n"); }
         }
-        if (geteuid()==0) unlink(UDEV_PIDFILE);
+        unlink(pidfile_path());
     } else if (!strcmp(cmd,"trigger")) {
         if (test) { printf("[trigger dry-run] would write '%s' to %s uevent files (subsys=%s)\n",
                           tract, trsub?"/sys/bus/*":"/sys/devices", subsys?subsys:"*"); return 0; }
