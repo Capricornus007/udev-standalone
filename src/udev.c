@@ -9,6 +9,7 @@
 #include <sys/socket.h>
 #include <linux/netlink.h>
 #include <sys/stat.h>
+#include <sys/wait.h>
 #include <sys/sysmacros.h>
 #include <pwd.h>
 #include <grp.h>
@@ -98,6 +99,15 @@ typedef struct {
     char a_key[RL_MAX_ASG][40];
     char a_op [RL_MAX_ASG][3];
     char a_val[RL_MAX_ASG][160];
+    /* action extensions (milestone 6) */
+    char program[160];               /* PROGRAM="..."  -> capture stdout into RESULT */
+    char run[RL_MAX_ASG][160];       /* RUN+="..."     -> execute on event */
+    int  nrun;
+    char imp_kind[RL_MAX_ASG][16];   /* IMPORT{program|file} */
+    char imp_val[RL_MAX_ASG][160];
+    int  nimp;
+    char label[40];                  /* LABEL="x" */
+    char goto_l[40];                 /* GOTO="x" */
 } rule_t;
 
 typedef struct { rule_t *r; int n, cap; } ruleset_t;
@@ -127,6 +137,22 @@ static int split_tok(const char *tok, char *key, char *op, char *val) {
 static void rules_add(rule_t *r) {
     if (RS.n >= RS.cap) { RS.cap = RS.cap? RS.cap*2 : 16; RS.r = realloc(RS.r, RS.cap*sizeof(rule_t)); }
     RS.r[RS.n++] = *r;
+}
+
+/* tokenize a rule line into NUL-terminated tokens, respecting double quotes so
+   values containing spaces/commas (e.g. RUN+="/bin/echo hi there") stay whole.
+   quote characters are stripped from the returned token. */
+static char *next_tok(char *p, char **save) {
+    while (*p==' '||*p=='\t'||*p==',') p++;
+    if (*p==0) return NULL;
+    char *out = p, *w = p; int inq = 0;
+    for (char *q = p; *q; q++) {
+        if (*q=='"') { inq = !inq; continue; }
+        if (!inq && (*q==' '||*q=='\t'||*q==',')) { *w=0; *save=q+1; return out; }
+        *w++ = *q;
+    }
+    *w = 0; *save = w;
+    return out;
 }
 
 static void load_file(const char *path);
@@ -160,8 +186,8 @@ static void load_file(const char *path) {
         char *s = line; while (*s==' '||*s=='\t') s++;
         if (*s==0 || *s=='#') continue;
         rule_t cur; memset(&cur,0,sizeof cur);
-        char *tok = strtok(s," \t,");
-        while (tok) {
+        char *p = s, *tok;
+        while ((tok = next_tok(p,&p)) != NULL) {
             char key[40],op[3],val[160];
             if (split_tok(tok,key,op,val)==0) {
                 if (!strcmp(op,"==") || !strcmp(op,"!=")) {
@@ -172,17 +198,33 @@ static void load_file(const char *path) {
                         cur.nmatch++;
                     }
                 } else {
-                    if (cur.nasg<RL_MAX_ASG){
-                        snprintf(cur.a_key[cur.nasg],40,"%s",key);
-                        snprintf(cur.a_op[cur.nasg],3,"%s",op);
-                        snprintf(cur.a_val[cur.nasg],160,"%s",val);
-                        cur.nasg++;
+                    if (!strcmp(key,"MODE")||!strcmp(key,"OWNER")||!strcmp(key,"GROUP")
+                     || !strcmp(key,"SYMLINK")||!strcmp(key,"TAG")) {
+                        if (cur.nasg<RL_MAX_ASG){
+                            snprintf(cur.a_key[cur.nasg],40,"%s",key);
+                            snprintf(cur.a_op[cur.nasg],3,"%s",op);
+                            snprintf(cur.a_val[cur.nasg],160,"%s",val);
+                            cur.nasg++;
+                        }
+                    } else if (!strcmp(key,"PROGRAM")) {
+                        snprintf(cur.program,sizeof cur.program,"%s",val);
+                    } else if (!strcmp(key,"RUN")) {
+                        if (cur.nrun<RL_MAX_ASG) snprintf(cur.run[cur.nrun++],160,"%s",val);
+                    } else if (!strncmp(key,"IMPORT",6)) {
+                        char kind[16]="";
+                        const char *ob=strchr(key,'{'), *cb=strchr(key,'}');
+                        if (ob && cb && cb>ob) { size_t kl=cb-ob-1; if(kl>=16)kl=15; memcpy(kind,ob+1,kl); kind[kl]=0; }
+                        if (cur.nimp<RL_MAX_ASG){ snprintf(cur.imp_kind[cur.nimp],16,"%s",kind); snprintf(cur.imp_val[cur.nimp],160,"%s",val); cur.nimp++; }
+                    } else if (!strcmp(key,"LABEL")) {
+                        snprintf(cur.label,sizeof cur.label,"%.*s",(int)sizeof cur.label-1,val);
+                    } else if (!strcmp(key,"GOTO")) {
+                        snprintf(cur.goto_l,sizeof cur.goto_l,"%.*s",(int)sizeof cur.goto_l-1,val);
                     }
+                    /* other keys (NAME/OPTIONS/...) ignored for now */
                 }
             }
-            tok = strtok(NULL," \t,");
         }
-        if (cur.nmatch || cur.nasg) rules_add(&cur);
+        if (cur.nmatch || cur.nasg || cur.label[0] || cur.goto_l[0] || cur.nrun || cur.nimp || cur.program[0]) rules_add(&cur);
     }
     fclose(f);
 }
@@ -221,6 +263,56 @@ static int rule_matches(rule_t *r, uevent_t *ue) {
     return 1;
 }
 
+/* set or replace an env entry (KEY=VALUE) in the uevent */
+static void ue_setenv(uevent_t *ue, const char *key, const char *val) {
+    size_t kl = strlen(key);
+    for (int i=0;i<ue->nenv;i++)
+        if (strncmp(ue->env[i],key,kl)==0 && ue->env[i][kl]=='='){
+            snprintf(ue->env[i],UE_ENV_LEN,"%s=%s",key,val); return;
+        }
+    if (ue->nenv < UE_MAX_ENV) { snprintf(ue->env[ue->nenv],UE_ENV_LEN,"%s=%s",key,val); ue->nenv++; }
+}
+
+/* run a shell command, capture its stdout (capped) into out */
+static int run_capture(const char *cmd, char *out, size_t outsz) {
+    int p[2]; if (pipe(p)<0) return -1;
+    pid_t pid = fork();
+    if (pid<0){ close(p[0]); close(p[1]); return -1; }
+    if (pid==0){
+        close(p[0]); dup2(p[1],1); close(p[1]);
+        execl("/bin/sh","sh","-c",cmd,(char*)NULL);
+        _exit(127);
+    }
+    close(p[1]);
+    size_t got=0;
+    for (;;){
+        if (got>=outsz-1) break;
+        ssize_t r = read(p[0], out+got, outsz-1-got);
+        if (r<=0) break;
+        got += (size_t)r;
+    }
+    out[got]=0;
+    while (got>0 && (out[got-1]=='\n'||out[got-1]=='\r')) out[--got]=0;
+    close(p[0]);
+    int st; waitpid(pid,&st,0);
+    return 0;
+}
+
+/* fire-and-forget: run a shell command detached (used for RUN) */
+static void run_exec(const char *cmd) {
+    pid_t pid = fork();
+    if (pid<0) return;
+    if (pid==0){ setsid(); execl("/bin/sh","sh","-c",cmd,(char*)NULL); _exit(127); }
+    /* parent does not wait; the detached child reaps itself */
+}
+
+/* find a rule index by its LABEL (for GOTO) */
+static int find_label(const char *lbl) {
+    for (int i=0;i<RS.n;i++)
+        if (RS.r[i].label[0] && !strcmp(RS.r[i].label,lbl)) return i;
+    return -1;
+}
+
 /* ===================== actions ===================== */
 static int g_test=0;
 static void apply_rule(rule_t *r, uevent_t *ue) {
@@ -232,7 +324,28 @@ static void apply_rule(rule_t *r, uevent_t *ue) {
         else if(!strcmp(r->a_key[i],"GROUP")) snprintf(group,sizeof group,"%s",r->a_val[i]);
         else if(!strcmp(r->a_key[i],"SYMLINK")) snprintf(linkname,sizeof linkname,"%s",r->a_val[i]);
         else if(!strcmp(r->a_key[i],"TAG")) { if(ue->ntags<16) snprintf(ue->tags[ue->ntags++],64,"%s",r->a_val[i]); }
-        /* RUN/PROGRAM/IMPORT/GOTO -> milestone TODO */
+    }
+    /* PROGRAM: run and capture stdout into RESULT (visible to later rules via ENV{RESULT}) */
+    if (r->program[0]) {
+        char res[1024];
+        if (run_capture(r->program,res,sizeof res)==0 && res[0]) {
+            ue_setenv(ue,"RESULT",res);
+            if (g_test) printf("       PROGRAM '%s' => RESULT=%s\n", r->program, res);
+        }
+    }
+    /* IMPORT{program|file}: parse KEY=VALUE lines into the uevent env */
+    for (int k=0;k<r->nimp;k++){
+        if (!strcmp(r->imp_kind[k],"file")) {
+            FILE *f=fopen(r->imp_val[k],"r");
+            if (f){ char ln[512]; while(fgets(ln,sizeof ln,f)){ size_t l=strlen(ln); while(l&&(ln[l-1]=='\n'||ln[l-1]=='\r'))ln[--l]=0; char *eq=strchr(ln,'='); if(eq&&l){*eq=0; ue_setenv(ue,ln,eq+1); if(g_test)printf("       IMPORT %s=%s\n",ln,eq+1);} } fclose(f); }
+            else if (g_test) printf("       IMPORT file '%s' open failed\n", r->imp_val[k]);
+        } else {
+            char buf[1024];
+            if (run_capture(r->imp_val[k],buf,sizeof buf)==0 && buf[0]){
+                char *line=strtok(buf,"\n");
+                while(line){ char *eq=strchr(line,'='); if(eq){*eq=0; ue_setenv(ue,line,eq+1); if(g_test)printf("       IMPORT %s=%s\n",line,eq+1);} line=strtok(NULL,"\n"); }
+            }
+        }
     }
     if(!ue->devname[0]) return;
     char path[512]; snprintf(path,sizeof path,"/dev/%s",ue->devname);
@@ -243,6 +356,11 @@ static void apply_rule(rule_t *r, uevent_t *ue) {
         owner[0]?owner:"(kernel)", group[0]?group:"(kernel)");
     if (linkname[0]) printf("       symlink -> /dev/%s\n", linkname);
     if (ue->ntags) { printf("       tags:"); for(int t=0;t<ue->ntags;t++) printf(" %s",ue->tags[t]); printf("\n"); }
+    /* RUN: execute programs on the event (test mode only prints) */
+    for (int k=0;k<r->nrun;k++){
+        if (g_test) printf("       [would RUN] %s\n", r->run[k]);
+        else run_exec(r->run[k]);
+    }
     if (g_test) return;
     char *slash=strrchr(path,'/');
     if (slash && slash!=path){ *slash=0; mkdir(path,0755); *slash='/'; }
@@ -394,6 +512,29 @@ static void cmd_monitor(int kernel, int udev) {
     }
 }
 
+/* process one uevent through the whole ruleset: match, apply, honour GOTO/LABEL,
+   then write/remove the device DB. Shared by the daemon and `--test`. Returns the
+   number of matching rules. */
+static int process_uevent(uevent_t *ue) {
+    int is_add = strcmp(ue->action,"remove")!=0;
+    if (is_add) g_pending++;
+    int matched = 0;
+    for (int i=0; i<RS.n; ) {
+        rule_t *r = &RS.r[i];
+        if (!rule_matches(r,ue)) { i++; continue; }
+        matched++;
+        apply_rule(r,ue);
+        if (r->goto_l[0]) {
+            int t = find_label(r->goto_l);
+            if (t>=0) { i = t+1; continue; }
+        }
+        i++;
+    }
+    if (!strcmp(ue->action,"remove")) db_remove(ue); else db_write(ue);
+    if (is_add && g_pending>0) g_pending--;
+    return matched;
+}
+
 /* ===================== main ===================== */
 int main(int argc, char **argv) {
     const char *cmd = (argc>1 && argv[1][0]!='-') ? argv[1] : "daemon";
@@ -432,9 +573,7 @@ int main(int argc, char **argv) {
         if (ue_parse(buf, (ssize_t)rn, &ue) < 0) { fprintf(stderr, "failed to parse uevent\n"); return 1; }
         printf("[udev] test uevent: action=%s subsys=%s devname=%s devpath=%s\n",
                ue.action, ue.subsys, ue.devname, ue.devpath);
-        int matched = 0;
-        for (int i = 0; i < RS.n; i++)
-            if (rule_matches(&RS.r[i], &ue)) { apply_rule(&RS.r[i], &ue); matched++; }
+        int matched = process_uevent(&ue);
         printf("[udev] %d rule(s) matched\n", matched);
         return 0;
     }
@@ -450,12 +589,8 @@ int main(int argc, char **argv) {
             ssize_t n = recv(fd,buf,sizeof buf-1,0);
             if (n<=0) continue;
             uevent_t ue; if (ue_parse(buf,n,&ue)<0) continue;
-            int is_add = strcmp(ue.action,"remove")!=0;
-            if (is_add) g_pending++;
-            for (int i=0;i<RS.n;i++) if (rule_matches(&RS.r[i],&ue)) apply_rule(&RS.r[i],&ue);
+            process_uevent(&ue);
             monitor_send(buf, n);
-            if (!strcmp(ue.action,"remove")) db_remove(&ue); else db_write(&ue);
-            if (is_add && g_pending>0) g_pending--;
             if (g_reload) { rules_reload(g_rulesdir); g_reload=0; fprintf(stderr,"rules reloaded\n"); }
         }
     } else if (!strcmp(cmd,"trigger")) {
