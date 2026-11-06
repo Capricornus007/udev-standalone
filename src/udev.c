@@ -178,7 +178,7 @@ static void load_dir(const char *dir) {
     }
     closedir(d);
     qsort(names, n, sizeof(char*), cmp_str);
-    char path[512];
+    char path[1024];
     for (int i=0;i<n;i++) {
         snprintf(path,sizeof path,"%s/%s",dir,names[i]);
         load_file(path);
@@ -865,6 +865,44 @@ static int verify_file(const char *path) {
     return errs ? 1 : 0;
 }
 
+/* Build a kernel-style NUL-separated uevent buffer from a device's sysfs entry:
+   header "add@<devpath>", then ACTION/DEVPATH/SUBSYSTEM plus the device's own
+   KEY=VALUE lines from <syspath>/uevent. Used by `udev test` to dry-run the rules
+   against a real device without touching it. Returns bytes written, 0 on error. */
+static int build_uevent_from_syspath(const char *syspath, char *out, size_t outsz) {
+    char uev[1024], real[1024], sl[1024], lk[1024], line[512], sub[128]="";
+    if ((size_t)snprintf(uev,sizeof uev,"%s/uevent",syspath) >= sizeof uev) return 0;
+    FILE *f=fopen(uev,"r"); if(!f) return 0;
+    const char *devpath=syspath;
+    if (realpath(syspath,real)) devpath=real;
+    if (!strncmp(devpath,"/sys",4)) devpath += 4;
+    if ((size_t)snprintf(sl,sizeof sl,"%s/subsystem",syspath) < sizeof sl) {
+        ssize_t n=readlink(sl,lk,sizeof lk-1);
+        if (n>0){ lk[n]=0; char *b=strrchr(lk,'/'); snprintf(sub,sizeof sub,"%.120s",b?b+1:lk); }
+    }
+    size_t w=0;
+    /* every append is bounds-checked: a truncated uevent would silently test
+       the wrong rule set, so treat overflow as an error instead */
+#define PUT(...) do { \
+        if (w >= outsz) { fclose(f); return 0; } \
+        int n_ = snprintf(out+w, outsz-w, __VA_ARGS__); \
+        if (n_ < 0 || (size_t)n_ >= outsz-w) { fclose(f); return 0; } \
+        w += (size_t)n_ + 1; \
+    } while (0)
+    PUT("add@%s",devpath);
+    PUT("ACTION=add");
+    PUT("DEVPATH=%s",devpath);
+    if (sub[0]) PUT("SUBSYSTEM=%s",sub);
+    while (fgets(line,sizeof line,f)) {
+        size_t L=strlen(line); while(L&&(line[L-1]=='\n'||line[L-1]=='\r')) line[--L]=0;
+        if (!L) continue;
+        PUT("%s",line);
+    }
+#undef PUT
+    fclose(f);
+    return (int)w;
+}
+
 int main(int argc, char **argv) {
     const char *cmd = (argc>1 && argv[1][0]!='-') ? argv[1] : "daemon";
     int test=0; const char *testfile=NULL, *subsys=NULL, *dbkey=NULL, *ctlact="reload";
@@ -985,6 +1023,34 @@ int main(int argc, char **argv) {
         }
         if (total) { fprintf(stderr, "[verify] %d error(s)\n", total); return 1; }
         printf("[verify] OK\n");
+        return 0;
+    }
+
+    /* `udev test <syspath|uevent-file>` — dry-run the rule engine against a
+       device (reads <syspath>/uevent) or a synthetic uevent file. Prints matched
+       rules + builtin results; never writes the DB or /dev. Mirrors `udevadm test`. */
+    if (!strcmp(cmd,"test")) {
+        const char *arg = (argc>=3)? argv[2] : NULL;
+        if (!arg) { fprintf(stderr,"usage: udev test <syspath|uevent-file>\n"); return 1; }
+        char buf[8192]; int rn=0;
+        if (!strncmp(arg,"/sys/",5)) {
+            rn = build_uevent_from_syspath(arg, buf, sizeof buf);
+            if (rn<=0){ fprintf(stderr,"udev test: cannot read uevent from %s\n",arg); return 1; }
+        } else {
+            FILE *tf=fopen(arg,"rb");
+            if(!tf){ fprintf(stderr,"udev test: cannot open %s\n",arg); return 1; }
+            size_t r=fread(buf,1,sizeof buf-1,tf); fclose(tf);
+            if(!r){ fprintf(stderr,"udev test: empty file %s\n",arg); return 1; }
+            for(size_t i=0;i<r;i++) if(buf[i]=='\n') buf[i]=0;
+            buf[r]=0; rn=(int)r;
+        }
+        uevent_t ue;
+        if (ue_parse(buf,rn,&ue)<0){ fprintf(stderr,"udev test: failed to parse uevent\n"); return 1; }
+        printf("[udev] test uevent: action=%s subsys=%s devname=%s devpath=%s\n",
+               ue.action, ue.subsys, ue.devname, ue.devpath);
+        g_test = 1; g_apply = 0;
+        int matched = process_uevent(&ue);
+        printf("[udev] test: %d rule(s) matched (dry-run, nothing written)\n", matched);
         return 0;
     }
 
