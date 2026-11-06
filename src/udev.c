@@ -667,7 +667,20 @@ static void monitor_send(const char *buf, ssize_t len) {
 /* ===================== queue state (seed for udev_queue_*) ===================== */
 static volatile int g_pending = 0;
 static volatile int g_reload = 0;
+static int g_seqnum = 0;          /* monotonic udev event seqnum for udev_queue_* */
 static void on_sighup(int s){ (void)s; g_reload = 1; }
+
+/* Persist queue state so a libudev client (route Y) can read it without the
+   daemon's internal memory: /run/udev/queue holds SEQNUM + QUEUE_LENGTH.
+   kernel seqnum lives at /sys/kernel/uevent_seqnum (read by the lib directly). */
+static void queue_write_state(void) {
+    if (g_test) return;
+    char path[256]; snprintf(path,sizeof path,"/run/udev/queue");
+    FILE *f=fopen(path,"w"); if(!f) return;
+    fprintf(f,"SEQNUM=%d\n",g_seqnum);
+    fprintf(f,"QUEUE_LENGTH=%d\n",g_pending);
+    fclose(f);
+}
 
 /* ===================== admin subcommands ===================== */
 /* re-trigger: walk /sys/devices and write "add" into every uevent file */
@@ -749,6 +762,7 @@ static void cmd_monitor(int kernel, int udev) {
 static int process_uevent(uevent_t *ue) {
     int is_add = strcmp(ue->action,"remove")!=0;
     if (is_add) g_pending++;
+    g_seqnum++;                       /* every processed event advances the seqnum */
     int matched = 0;
     for (int i=0; i<RS.n; ) {
         rule_t *r = &RS.r[i];
@@ -763,6 +777,7 @@ static int process_uevent(uevent_t *ue) {
     }
     if (!strcmp(ue->action,"remove")) db_remove(ue); else db_write(ue);
     if (is_add && g_pending>0) g_pending--;
+    queue_write_state();
     return matched;
 }
 
