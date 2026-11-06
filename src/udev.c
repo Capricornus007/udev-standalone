@@ -762,13 +762,26 @@ static void trigger_walk(const char *dir) {
     }
     closedir(d);
 }
-static void cmd_settle(int timeout) {
+/* settle must work from a separate admin process, so read the daemon's persisted
+   queue state rather than this process's (always-zero) in-memory counter. */
+static int queue_length_from_rundir(void) {
+    char p[512]; snprintf(p,sizeof p,"%s/queue",rundir());
+    int len=0; FILE *f=fopen(p,"r");
+    if(f){ char l[256]; while(fgets(l,sizeof l,f)){
+        if(!strncmp(l,"QUEUE_LENGTH=",13)){ len=atoi(l+13); break; } } fclose(f); }
+    return len;
+}
+static int cmd_settle(int timeout) {
     time_t start=time(NULL);
-    while (g_pending>0) {
-        if (time(NULL)-start >= timeout) { fprintf(stderr,"settle: timeout (%ds)\n",timeout); return; }
+    for(;;){
+        int pending=queue_length_from_rundir();
+        if(pending<=0){ printf("settled\n"); return 0; }
+        if(timeout>0 && time(NULL)-start>=timeout){
+            fprintf(stderr,"settle: timeout (%ds, %d pending)\n",timeout,pending);
+            return 1;
+        }
         usleep(50000);
     }
-    printf("settled (%d pending)\n", g_pending);
 }
 static void cmd_info(const char *dbkey) {
     char path[512]; snprintf(path,sizeof path,"%s/data/%s",rundir(),dbkey);
@@ -1161,8 +1174,7 @@ int main(int argc, char **argv) {
         printf("trigger done\n");
         return 0;
     } else if (!strcmp(cmd,"settle")) {
-        cmd_settle(timeout);
-        return 0;
+        return cmd_settle(timeout);
     } else if (!strcmp(cmd,"info")) {
         if(!dbkey){ fprintf(stderr,"usage: udev info --db=cMAJ:MIN\n"); return 1; }
         cmd_info(dbkey);
