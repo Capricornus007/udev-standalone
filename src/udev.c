@@ -829,6 +829,42 @@ static void resolve_rules_dir(const char *argv0) {
 }
 
 /* ===================== main ===================== */
+/* `udev verify`: syntax-check a rules file (or every *.rules in a directory).
+   Reports line-level errors (unbalanced quotes, missing operator, unknown key)
+   and returns non-zero if any are found. Mirrors `udevadm verify`. */
+static int verify_file(const char *path) {
+    FILE *f = fopen(path,"r");
+    if (!f) { printf("[verify] cannot open %s\n", path); return 1; }
+    char line[1024]; int errs=0, rules=0, ln=0;
+    while (fgets(line,sizeof line,f)) {
+        ln++;
+        size_t L=strlen(line); while (L && (line[L-1]=='\n'||line[L-1]=='\r')) line[--L]=0;
+        char *s=line; while (*s==' '||*s=='\t') s++;
+        if (*s==0 || *s=='#') continue;
+        int q=0; for (char *c=s; *c; c++) if (*c=='"') q++;
+        if (q%2) { printf("[verify] %s:%d: unbalanced quotes\n", path, ln); errs++; }
+        char *p=s, *tok;
+        while ((tok = next_tok(p,&p)) != NULL) {
+            char key[40],op[3],val[160];
+            if (split_tok(tok,key,op,val)!=0) {
+                printf("[verify] %s:%d: no operator in token '%s'\n", path, ln, tok); errs++;
+            } else if (!strcmp(key,"SUBSYSTEM")||!strcmp(key,"KERNEL")||!strcmp(key,"ACTION")
+                    ||!strncmp(key,"ENV{",4)||!strncmp(key,"ATTR{",5)||!strncmp(key,"IMPORT",6)
+                    ||!strcmp(key,"MODE")||!strcmp(key,"OWNER")||!strcmp(key,"GROUP")
+                    ||!strcmp(key,"SYMLINK")||!strcmp(key,"TAG")||!strcmp(key,"PROGRAM")
+                    ||!strcmp(key,"RUN")||!strcmp(key,"LABEL")||!strcmp(key,"GOTO")) {
+                /* recognised key — fine */
+            } else {
+                printf("[verify] %s:%d: unknown key '%s'\n", path, ln, key); errs++;
+            }
+        }
+        rules++;
+    }
+    fclose(f);
+    printf("[verify] %s: %d line(s), %d rule(s), %d error(s)\n", path, ln, rules, errs);
+    return errs ? 1 : 0;
+}
+
 int main(int argc, char **argv) {
     const char *cmd = (argc>1 && argv[1][0]!='-') ? argv[1] : "daemon";
     int test=0; const char *testfile=NULL, *subsys=NULL, *dbkey=NULL, *ctlact="reload";
@@ -927,6 +963,28 @@ int main(int argc, char **argv) {
         FILE *f=fopen(p,"r");
         if(f){ char l[256]; while(fgets(l,sizeof l,f)){ if(!strncmp(l,"SEQNUM=",7)) seq=strtoull(l+7,NULL,10); else if(!strncmp(l,"QUEUE_LENGTH=",13)) len=(int)strtol(l+13,NULL,10); } fclose(f); }
         printf("SEQNUM=%llu\nQUEUE_LENGTH=%d\n", seq, len);
+        return 0;
+    }
+
+    /* `udev verify <rules-file-or-dir>...` — syntax-check rule files (or all
+       *.rules in a dir); non-zero exit if any error. Mirrors `udevadm verify`. */
+    if (!strcmp(cmd,"verify")) {
+        if (argc < 3) { fprintf(stderr, "usage: udev verify <rules-file-or-dir>...\n"); return 1; }
+        int total=0;
+        for (int i=2;i<argc;i++) {
+            struct stat st;
+            if (stat(argv[i],&st)==0 && S_ISDIR(st.st_mode)) {
+                DIR *dp=opendir(argv[i]); if(!dp) continue;
+                struct dirent *e; char nm[600];
+                while ((e=readdir(dp))) {
+                    if (e->d_name[0]=='.') continue;
+                    if (strstr(e->d_name,".rules")) { snprintf(nm,sizeof nm,"%s/%s",argv[i],e->d_name); total+=verify_file(nm); }
+                }
+                closedir(dp);
+            } else total += verify_file(argv[i]);
+        }
+        if (total) { fprintf(stderr, "[verify] %d error(s)\n", total); return 1; }
+        printf("[verify] OK\n");
         return 0;
     }
 

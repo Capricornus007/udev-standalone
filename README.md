@@ -48,10 +48,12 @@ A **clean-room** device manager that merges two worlds. Licensed under
       + symlink + parent dirs), so a fake root is fully inspectable without root
 - [x] **`udev queue` subcommand** — print the daemon's queue state (SEQNUM / QUEUE_LENGTH)
       from the rundir, drop-in for `udevadm settle` status reads; honors `UDEV_RUNDIR`
+- [x] **`udev verify <rules-file|dir>...` subcommand** — syntax-check rules (unbalanced
+      quotes / missing operator / unknown key), non-zero exit on error; mirrors `udevadm verify`
 - [x] **proven end-to-end**: `udev-standalone/test/` + `libudev-standalone/test/integration.sh`
       runs the daemon `apply` then reads the produced DB with a libudev-only `udevinfo`
-      (by name and by devnum), asserting `ID_PATH`, `ID_FS_TYPE`, queue state, and the
-      fake `/dev` node — 13/13 checks pass
+      (by name and by devnum), asserting `ID_PATH`, `ID_FS_TYPE`, queue state, the
+      fake `/dev` node, and `udev verify` — 15/15 checks pass
 
 ## Build & test
 
