@@ -446,9 +446,51 @@ static void builtin_net_id(uevent_t *ue) {
     }
 }
 
+/* path_id: persistent location-based device path (ID_PATH / ID_PATH_TAG).
+   Builds a hyphen-joined topology chain: pci-<devaddr>[-usb-<func>:<bus>:<port>[:<cfg>.<if>]].
+   PCI addressing is preserved verbatim (no re-formatting) so the path stays stable. */
+static void builtin_path_id(uevent_t *ue) {
+    char path[256]; path[0]=0;
+    char tmp[384]; snprintf(tmp,sizeof tmp,"%s/",ue->devpath);
+    char *save=NULL; int pci_func=-1;
+    for (char *tok=strtok_r(tmp,"/",&save); tok; tok=strtok_r(NULL,"/",&save)) {
+        int d,b,s,f;
+        if (sscanf(tok,"%x:%x:%x.%x",&d,&b,&s,&f)==4) {
+            snprintf(path,sizeof path,"pci-%s",tok);   /* keep original addressing */
+            pci_func=f;
+        } else if (!strncmp(tok,"usb",3) && tok[3]>='0' && tok[3]<='9') {
+            int n; if (sscanf(tok,"usb%d",&n)==1) {
+                size_t pl=strlen(path);
+                if (pl<sizeof path-32) snprintf(path+pl,sizeof path-pl,"-usb-%d:%d",pci_func<0?0:pci_func,n);
+            }
+        } else if (tok[0]>='0' && tok[0]<='9' && strchr(tok,'-')) {
+            char *colon=strchr(tok,':');
+            if (colon) {            /* interface level N-M:C.D -> append only :C.D */
+                size_t pl=strlen(path);
+                if (pl<sizeof path-32) snprintf(path+pl,sizeof path-pl,":%s",colon+1);
+            } else {                /* device level N-M -> append :M */
+                char *dash=strchr(tok,'-'); char port[16]; int pi=0; const char *pp=dash+1;
+                while (*pp && pi<15) port[pi++]=*pp++;
+                port[pi]=0;
+                size_t pl=strlen(path);
+                if (pl<sizeof path-32) snprintf(path+pl,sizeof path-pl,":%s",port);
+            }
+        }
+    }
+    if (path[0]) {
+        ue_setenv(ue,"ID_PATH",path);
+        char tag[256]; int ti=0;
+        for (int i=0; path[i] && ti<255; i++) tag[ti++] = (isalnum((unsigned char)path[i])||path[i]=='_')?path[i]:'_';
+        tag[ti]=0;
+        ue_setenv(ue,"ID_PATH_TAG",tag);
+        if (g_test){ printf("       IMPORT(builtin path_id) ID_PATH=%s\n",path); printf("       IMPORT(builtin path_id) ID_PATH_TAG=%s\n",tag); }
+    }
+}
+
 static void run_builtin(uevent_t *ue, const char *name) {
     if (!strcmp(name,"net_id")) builtin_net_id(ue);
-    /* path_id / blkid: not yet implemented (milestone 9/10) */
+    else if (!strcmp(name,"path_id")) builtin_path_id(ue);
+    /* blkid: not yet implemented (milestone 10) */
 }
 
 /* ===================== actions ===================== */
