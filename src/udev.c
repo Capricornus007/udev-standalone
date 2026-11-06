@@ -660,6 +660,14 @@ static void apply_rule(rule_t *r, uevent_t *ue) {
 /* Apply the accumulated event state once, after every matching rule has run.
    This is what makes MODE/GROUP/SYMLINK/TAG from different rules compose. */
 static void apply_event(uevent_t *ue) {
+    /* Remove events must NEVER create/patch nodes: devtmpfs already deleted it,
+       and re-mknod-ing here would resurrect a stale /dev entry after every
+       unplug (and the EEXIST fixup would chmod the fresh node of whatever
+       minor got reused). Symlink cleanup lives in db_remove; RUN+ still fires. */
+    if (!g_test && !strcmp(ue->action,"remove")) {
+        for (int i=0;i<ue->nruns;i++) run_exec(ue,ue->runs[i]);
+        return;
+    }
     int has_node = ue->devname[0] && (ue->major || ue->minor);
     char path[512]="";
     if (has_node) {
@@ -713,7 +721,10 @@ static void apply_event(uevent_t *ue) {
             char sp[512];
             if (g_apply) snprintf(sp,sizeof sp,"%s/dev/%s", rundir(), ue->symlinks[i]);
             else         snprintf(sp,sizeof sp,"/dev/%s", ue->symlinks[i]);
-            char *ss=strrchr(sp,'/'); if(ss&&ss!=sp){*ss=0; mkdir(sp,0755); *ss='/';}
+            /* create ALL parent dirs: links live nested (disk/by-uuid/x,
+               input/by-path/x); a single mkdir left the parent missing and
+               symlink() failed silently, so no stable link ever appeared. */
+            for (char *q=sp+1; *q; q++) if (*q=='/') { *q=0; mkdir(sp,0755); *q='/'; }
             symlink(path, sp);
             if (ue->ndevlinks < 16)
                 snprintf(ue->devlinks[ue->ndevlinks++], 256, "%s", ue->symlinks[i]);
@@ -775,6 +786,26 @@ static void db_remove(uevent_t *ue) {
     if (!db_key(ue,key,sizeof key)) return;
     char path[512];
     snprintf(path, sizeof path, "%s/data/%s", rundir(), key);
+    /* The kernel's devtmpfs deletes the device node itself, but SYMLINK+ links
+       (disk/by-uuid/..., input/by-path/...) are ours: read them back from the
+       DB before dropping it, or every unplug leaves a dangling /dev symlink
+       that blocks the next device that reuses the uuid/path. */
+    FILE *f = fopen(path, "r");
+    if (f) {
+        char line[1024];
+        while (fgets(line, sizeof line, f)) {
+            if (strncmp(line, "S:", 2)) continue;
+            char *nl = strchr(line, '\n'); if (nl) *nl = 0;
+            char ln[512];
+            snprintf(ln, sizeof ln, "%.500s", line + 2);
+            if (!*ln) continue;
+            char sp[768];   /* g_rundir(256) + "/dev/"(5) + ln(500) + NUL */
+            if (g_apply) snprintf(sp, sizeof sp, "%s/dev/%.500s", rundir(), ln);
+            else         snprintf(sp, sizeof sp, "/dev/%.500s", ln);
+            unlink(sp);
+        }
+        fclose(f);
+    }
     unlink(path);
 }
 
