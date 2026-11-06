@@ -903,6 +903,21 @@ static int build_uevent_from_syspath(const char *syspath, char *out, size_t outs
     return (int)w;
 }
 
+/* Load a uevent from a /sys device path or a newline-separated file.
+   Returns bytes written (NUL-terminated buffer) or -1 on error. */
+static int uevent_from_arg(const char *arg, char *buf, size_t bufsz) {
+    if (!strncmp(arg,"/sys/",5)) {
+        int rn = build_uevent_from_syspath(arg, buf, bufsz);
+        return rn>0 ? rn : -1;
+    }
+    FILE *tf=fopen(arg,"rb"); if(!tf) return -1;
+    size_t r=fread(buf,1,bufsz-1,tf); fclose(tf);
+    if(!r) return -1;
+    for(size_t i=0;i<r;i++) if(buf[i]=='\n') buf[i]=0;
+    buf[r]=0;
+    return (int)r;
+}
+
 int main(int argc, char **argv) {
     /* argv[0] personality: systemd ships udevd/udevadm/udev-hwdb as one ELF
        dispatched by the invoked name. Mirror that so symlinks are drop-in. */
@@ -1048,18 +1063,9 @@ int main(int argc, char **argv) {
     if (!strcmp(cmd,"test")) {
         const char *arg = (argc>=3)? argv[2] : NULL;
         if (!arg) { fprintf(stderr,"usage: udev test <syspath|uevent-file>\n"); return 1; }
-        char buf[8192]; int rn=0;
-        if (!strncmp(arg,"/sys/",5)) {
-            rn = build_uevent_from_syspath(arg, buf, sizeof buf);
-            if (rn<=0){ fprintf(stderr,"udev test: cannot read uevent from %s\n",arg); return 1; }
-        } else {
-            FILE *tf=fopen(arg,"rb");
-            if(!tf){ fprintf(stderr,"udev test: cannot open %s\n",arg); return 1; }
-            size_t r=fread(buf,1,sizeof buf-1,tf); fclose(tf);
-            if(!r){ fprintf(stderr,"udev test: empty file %s\n",arg); return 1; }
-            for(size_t i=0;i<r;i++) if(buf[i]=='\n') buf[i]=0;
-            buf[r]=0; rn=(int)r;
-        }
+        char buf[8192];
+        int rn=uevent_from_arg(arg, buf, sizeof buf);
+        if (rn<0){ fprintf(stderr,"udev test: cannot read uevent from %s\n",arg); return 1; }
         uevent_t ue;
         if (ue_parse(buf,rn,&ue)<0){ fprintf(stderr,"udev test: failed to parse uevent\n"); return 1; }
         printf("[udev] test uevent: action=%s subsys=%s devname=%s devpath=%s\n",
@@ -1067,6 +1073,29 @@ int main(int argc, char **argv) {
         g_test = 1; g_apply = 0;
         int matched = process_uevent(&ue);
         printf("[udev] test: %d rule(s) matched (dry-run, nothing written)\n", matched);
+        return 0;
+    }
+
+    /* `udev test-builtin <builtin> <syspath|uevent-file>` — run one builtin
+       against a device and print the environment it produces; nothing is
+       written. Mirrors `udevadm test-builtin`. */
+    if (!strcmp(cmd,"test-builtin")) {
+        if (argc<4) { fprintf(stderr,"usage: udev test-builtin <builtin> <syspath|uevent-file>\n"); return 1; }
+        const char *bn=argv[2], *arg=argv[3];
+        if (strcmp(bn,"net_id") && strcmp(bn,"path_id") && strcmp(bn,"blkid")) {
+            fprintf(stderr,"udev test-builtin: unknown builtin '%s' (supported: net_id, path_id, blkid)\n",bn);
+            return 1;
+        }
+        char buf[8192];
+        int rn=uevent_from_arg(arg, buf, sizeof buf);
+        if (rn<0){ fprintf(stderr,"udev test-builtin: cannot read uevent from %s\n",arg); return 1; }
+        uevent_t ue;
+        if (ue_parse(buf,rn,&ue)<0){ fprintf(stderr,"udev test-builtin: failed to parse uevent\n"); return 1; }
+        printf("[udev] test-builtin %s: action=%s subsys=%s devname=%s devpath=%s\n",
+               bn, ue.action, ue.subsys, ue.devname, ue.devpath);
+        g_test = 1; g_apply = 0;
+        run_builtin(&ue, bn);
+        printf("[udev] test-builtin: done (dry-run, nothing written)\n");
         return 0;
     }
 
@@ -1119,7 +1148,7 @@ int main(int argc, char **argv) {
         return 0;
     } else {
         fprintf(stderr,"unknown command: %s\n",cmd);
-        fprintf(stderr,"usage: udev [daemon|trigger|settle|info|control|monitor|hwdb|apply|queue|verify|test] [options]\n");
+        fprintf(stderr,"usage: udev [daemon|trigger|settle|info|control|monitor|hwdb|apply|queue|verify|test|test-builtin] [options]\n");
         return 1;
     }
     return 0;

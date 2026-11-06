@@ -53,13 +53,17 @@ A **clean-room** device manager that merges two worlds. Licensed under
 - [x] **`udev test <syspath|uevent-file>` subcommand** — dry-run the rule engine against a
       real `/sys` device (synthesises the uevent from sysfs) or a synthetic uevent file,
       printing matched rules and builtin results without writing anything; mirrors `udevadm test`
+- [x] **`udev test-builtin <builtin> <syspath|uevent-file>` subcommand** — run a single
+      builtin (`net_id`/`path_id`/`blkid`) against a device and print the environment
+      it produces, dry-run only; mirrors `udevadm test-builtin`
 - [x] **argv[0] personalities** — the same ELF dispatches as `udevd` / `systemd-udevd`
       (daemon), `udevadm <command>` (admin), and `udev-hwdb <update|query <alias>>`
       (hwdb), matching systemd's single-binary layout so symlinks are drop-in
 - [x] **proven end-to-end**: `udev-standalone/test/` + `libudev-standalone/test/integration.sh`
       runs the daemon `apply` then reads the produced DB with a libudev-only `udevinfo`
       (by name and by devnum), asserting `ID_PATH`, `ID_FS_TYPE`, queue state, the
-      fake `/dev` node, `udev verify`, `udev test`, and argv[0] personalities — 23/23 checks pass
+      fake `/dev` node, `udev verify`, `udev test`, `udev test-builtin`, and argv[0]
+      personalities — 26/26 checks pass
 
 ## Build & test
 
