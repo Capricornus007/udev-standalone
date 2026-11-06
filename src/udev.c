@@ -487,10 +487,46 @@ static void builtin_path_id(uevent_t *ue) {
     }
 }
 
+/* blkid: filesystem-type sniffer (clean-room, no libblkid).
+   Detects common filesystems by magic bytes and, for ext2/3/4, also reads the
+   UUID and label from the superblock. The device is taken from DEVNAME (an
+   absolute path in --test, otherwise /dev/<name>). */
+static void builtin_blkid(uevent_t *ue) {
+    const char *dev = ue_getenv(ue,"DEVNAME");
+    if (!dev) return;
+    char path[256];
+    if (dev[0]=='/') snprintf(path,sizeof path,"%s",dev);
+    else snprintf(path,sizeof path,"/dev/%s",dev);
+    FILE *f=fopen(path,"rb"); if(!f){ if(g_test)printf("       IMPORT(builtin blkid): cannot open %s\n",path); return; }
+    unsigned char buf[0x10100]; size_t got=fread(buf,1,sizeof buf,f); fclose(f);
+    if (got<2) return;
+    if (got>0x439 && buf[0x438]==0x53 && buf[0x439]==0xEF) {       /* ext2/3/4 superblock (LE 0xEF53) */
+        ue_setenv(ue,"ID_FS_TYPE","ext4");
+        if (g_test) printf("       IMPORT(builtin blkid) ID_FS_TYPE=ext4\n");
+        const unsigned char *u=buf+0x468;
+        char uuid[40];
+        snprintf(uuid,sizeof uuid,"%02x%02x%02x%02x-%02x%02x-%02x%02x-%02x%02x-%02x%02x%02x%02x%02x%02x",
+            u[0],u[1],u[2],u[3],u[4],u[5],u[6],u[7],u[8],u[9],u[10],u[11],u[12],u[13],u[14],u[15]);
+        ue_setenv(ue,"ID_FS_UUID",uuid);
+        if (g_test) printf("       IMPORT(builtin blkid) ID_FS_UUID=%s\n",uuid);
+        char label[17]; memcpy(label,buf+0x478,16); label[16]=0;
+        if (label[0]) { ue_setenv(ue,"ID_FS_LABEL",label); if(g_test)printf("       IMPORT(builtin blkid) ID_FS_LABEL=%s\n",label); }
+        return;
+    }
+    if (got>0x56 && !memcmp(buf+0x52,"FAT32",5)) { ue_setenv(ue,"ID_FS_TYPE","vfat"); if(g_test)printf("       IMPORT(builtin blkid) ID_FS_TYPE=vfat\n"); return; }
+    if (got>0x3b && !memcmp(buf+0x36,"FAT12",5)) { ue_setenv(ue,"ID_FS_TYPE","vfat"); if(g_test)printf("       IMPORT(builtin blkid) ID_FS_TYPE=vfat\n"); return; }
+    if (got>0x3b && !memcmp(buf+0x36,"FAT16",5)) { ue_setenv(ue,"ID_FS_TYPE","vfat"); if(g_test)printf("       IMPORT(builtin blkid) ID_FS_TYPE=vfat\n"); return; }
+    if (got>0x08 && !memcmp(buf+3,"NTFS",4))     { ue_setenv(ue,"ID_FS_TYPE","ntfs"); if(g_test)printf("       IMPORT(builtin blkid) ID_FS_TYPE=ntfs\n"); return; }
+    if (got>4 && !memcmp(buf,"XFSB",4))          { ue_setenv(ue,"ID_FS_TYPE","xfs");  if(g_test)printf("       IMPORT(builtin blkid) ID_FS_TYPE=xfs\n");  return; }
+    if (got>0x10048 && !memcmp(buf+0x10040,"_BHRfS_M",8)) { ue_setenv(ue,"ID_FS_TYPE","btrfs"); if(g_test)printf("       IMPORT(builtin blkid) ID_FS_TYPE=btrfs\n"); return; }
+    if (got>0x2005 && (!memcmp(buf+0x1FFB,"SWAPSPACE2",10) || !memcmp(buf+0x1FFB,"SWAP-SPACE",10))) { ue_setenv(ue,"ID_FS_TYPE","swap"); if(g_test)printf("       IMPORT(builtin blkid) ID_FS_TYPE=swap\n"); return; }
+    if (g_test) printf("       IMPORT(builtin blkid): no recognized filesystem on %s\n",path);
+}
+
 static void run_builtin(uevent_t *ue, const char *name) {
     if (!strcmp(name,"net_id")) builtin_net_id(ue);
     else if (!strcmp(name,"path_id")) builtin_path_id(ue);
-    /* blkid: not yet implemented (milestone 10) */
+    else if (!strcmp(name,"blkid")) builtin_blkid(ue);
 }
 
 /* ===================== actions ===================== */

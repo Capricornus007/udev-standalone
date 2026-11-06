@@ -1,3 +1,4 @@
 # builtin demos
 SUBSYSTEM=="net",   IMPORT{builtin}="net_id"
 SUBSYSTEM=="input", IMPORT{builtin}="path_id"
+SUBSYSTEM=="block", IMPORT{builtin}="blkid"
