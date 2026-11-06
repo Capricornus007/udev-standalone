@@ -904,15 +904,31 @@ static int build_uevent_from_syspath(const char *syspath, char *out, size_t outs
 }
 
 int main(int argc, char **argv) {
-    const char *cmd = (argc>1 && argv[1][0]!='-') ? argv[1] : "daemon";
+    /* argv[0] personality: systemd ships udevd/udevadm/udev-hwdb as one ELF
+       dispatched by the invoked name. Mirror that so symlinks are drop-in. */
+    const char *prog = strrchr(argv[0], '/'); prog = prog ? prog + 1 : argv[0];
+    const char *cmd;
+    int argi;
+    if (!strcmp(prog,"udevadm")) {
+        if (argc>1 && argv[1][0]!='-') { cmd=argv[1]; argi=2; }
+        else { fprintf(stderr,"usage: udevadm <command> [options]\n"); return 1; }
+    } else if (!strcmp(prog,"udevd") || !strcmp(prog,"systemd-udevd")) {
+        cmd="daemon"; argi=1;
+    } else if (!strcmp(prog,"udev-hwdb") || !strcmp(prog,"systemd-hwdb")) {
+        cmd="hwdb"; argi=1;
+    } else {
+        cmd = (argc>1 && argv[1][0]!='-') ? argv[1] : "daemon";
+        argi = strcmp(cmd,"daemon")==0 ? 1 : 2;
+    }
     int test=0; const char *testfile=NULL, *subsys=NULL, *dbkey=NULL, *ctlact="reload";
     int timeout=120, kernel=0, udev=0;
     const char *query=NULL; int val_only=0, do_update=0;
-    for (int i = (strcmp(cmd,"daemon")==0)?1:2; i<argc; i++) {
+    for (int i = argi; i<argc; i++) {
         if(!strcmp(argv[i],"--test")){ test=1; if(i+1<argc) testfile=argv[++i]; }
         else if(!strcmp(argv[i],"--rules")){ if(i+1<argc) snprintf(g_rulesdir,sizeof g_rulesdir,"%s",argv[++i]); }
         else if(!strcmp(argv[i],"--subsystem")){ if(i+1<argc) subsys=argv[++i]; }
         else if(!strcmp(argv[i],"--timeout")){ if(i+1<argc) timeout=atoi(argv[++i]); }
+        else if(!strncmp(argv[i],"--timeout=",10)){ timeout=atoi(argv[i]+10); }
         else if(!strcmp(argv[i],"--db")){ if(i+1<argc) dbkey=argv[++i]; }
         else if(!strcmp(argv[i],"--kernel")||!strcmp(argv[i],"-k")) kernel=1;
         else if(!strcmp(argv[i],"--udev")||!strcmp(argv[i],"-u")) udev=1;
@@ -1088,6 +1104,11 @@ int main(int argc, char **argv) {
         cmd_monitor(kernel, udev);
         return 0;
     } else if (!strcmp(cmd,"hwdb")) {
+        /* udev-hwdb / systemd-hwdb positional verbs: `update`, `query <alias>` */
+        for (int i=argi; i<argc; i++) {
+            if (!strcmp(argv[i],"update")) do_update=1;
+            else if (!strcmp(argv[i],"query") && i+1<argc) query=argv[++i];
+        }
         if (do_update) {
             hwdb_load_all();
             printf("hwdb: loaded %d entries (text query mode — no binary cache built)\n", HWn);
@@ -1098,7 +1119,7 @@ int main(int argc, char **argv) {
         return 0;
     } else {
         fprintf(stderr,"unknown command: %s\n",cmd);
-        fprintf(stderr,"usage: udev [daemon|trigger|settle|info|control|monitor|hwdb] [options]\n");
+        fprintf(stderr,"usage: udev [daemon|trigger|settle|info|control|monitor|hwdb|apply|queue|verify|test] [options]\n");
         return 1;
     }
     return 0;
