@@ -59,6 +59,9 @@ A **clean-room** device manager that merges two worlds. Licensed under
 - [x] **real udev database layout** — keys `b/c MAJOR:MINOR`, `nIFINDEX` (network),
       `+subsystem:sysname` (everything else); writes `S:` devlinks, `I:` init time,
       `E:` properties, `G:`/`Q:` tags, so network and non-devnum devices persist too
+- [x] **`udev info <devpath|--db=KEY>`** — accepts a `/dev` node, a `/sys` path or a raw
+      DB key and prints `P:/N:/S:/E:` lines or `-q property|name|symlink|path`
+      (mirrors `udevadm info`)
 - [x] **`udev settle` reads the daemon's persisted queue** (`/run/udev/queue`) instead of a
       process-local counter, so an admin process waits for the real pending count and
       exits non-zero on timeout
@@ -69,7 +72,7 @@ A **clean-room** device manager that merges two worlds. Licensed under
       runs the daemon `apply` then reads the produced DB with a libudev-only `udevinfo`
       (by name and by devnum), asserting `ID_PATH`, `ID_FS_TYPE`, queue state, the
       fake `/dev` node, `udev verify`, `udev test`, `udev test-builtin`, and argv[0]
-      personalities — 33/33 checks pass
+      personalities — 36/36 checks pass
 
 ## Build & test
 

@@ -783,12 +783,87 @@ static int cmd_settle(int timeout) {
         usleep(50000);
     }
 }
-static void cmd_info(const char *dbkey) {
+/* Resolve a device argument (DB key, /dev node or /sys path) to a DB key. */
+static int db_key_from_path(const char *arg, char *out, size_t n) {
+    if (!arg || !arg[0]) return 0;
+    if ((arg[0]=='b'||arg[0]=='c') && strchr(arg,':')) { snprintf(out,n,"%.120s",arg); return 1; }
+    if (arg[0]=='n' && isdigit((unsigned char)arg[1])) { snprintf(out,n,"%.120s",arg); return 1; }
+    if (arg[0]=='+' && strchr(arg,':')) { snprintf(out,n,"%.120s",arg); return 1; }
+    if (!strncmp(arg,"/sys/",5)) {
+        char p[1300]; snprintf(p,sizeof p,"%s/dev",arg);
+        FILE *f=fopen(p,"r");
+        if (f) {
+            unsigned mj=0,mn=0; int ok=(fscanf(f,"%u:%u",&mj,&mn)==2); fclose(f);
+            if (ok) {
+                char s[1300]; snprintf(s,sizeof s,"%s/subsystem",arg);
+                char lk[256]=""; ssize_t l=readlink(s,lk,sizeof lk-1);
+                int blk=0; if (l>0) { lk[l]=0; if (strstr(lk,"/block")) blk=1; }
+                snprintf(out,n,"%c%u:%u",blk?'b':'c',mj,mn);
+                return 1;
+            }
+        }
+        snprintf(p,sizeof p,"%s/ifindex",arg);
+        f=fopen(p,"r");
+        if (f) { char v[32]={0}; int ok=(fscanf(f,"%31s",v)==1); fclose(f);
+            if (ok) { snprintf(out,n,"n%.30s",v); return 1; } }
+        char real[1300]; char lk[512]="";
+        if (realpath(arg,real)) {
+            char s[1400]; snprintf(s,sizeof s,"%s/subsystem",arg);
+            ssize_t l=readlink(s,lk,sizeof lk-1);
+            if (l>0) { lk[l]=0; char *b=strrchr(lk,'/'); char *sn=strrchr(real,'/');
+                if (b&&sn) { snprintf(out,n,"+%.60s:%.60s",b+1,sn+1); return 1; } }
+        }
+        return 0;
+    }
+    struct stat st;
+    if (stat(arg,&st)==0 && (S_ISBLK(st.st_mode)||S_ISCHR(st.st_mode))) {
+        snprintf(out,n,"%c%u:%u",S_ISBLK(st.st_mode)?'b':'c',major(st.st_rdev),minor(st.st_rdev));
+        return 1;
+    }
+    return 0;
+}
+
+static void cmd_info(const char *dbkey, const char *mode, const char *arg) {
     char path[512]; snprintf(path,sizeof path,"%s/data/%s",rundir(),dbkey);
-    FILE *f=fopen(path,"r"); if(!f){ printf("no DB entry for %s\n",dbkey); return; }
-    char line[512];
-    while (fgets(line,sizeof line,f)) fputs(line,stdout);
+    FILE *f=fopen(path,"r"); if(!f){ fprintf(stderr,"no DB entry for %s\n",dbkey); return; }
+    char line[1024], devpath[512]="", devname[256]="", links[8][512]; int nlinks=0;
+    while (fgets(line,sizeof line,f)) {
+        size_t L=strlen(line); while(L&&(line[L-1]=='\n'||line[L-1]=='\r')) line[--L]=0;
+        if (line[0]=='E' && line[1]==':') {
+            if (!strncmp(line+2,"DEVPATH=",8)) snprintf(devpath,sizeof devpath,"%.511s",line+10);
+            else if (!strncmp(line+2,"DEVNAME=",8)) snprintf(devname,sizeof devname,"/dev/%.200s",line+10);
+        } else if (line[0]=='S' && line[1]==':' && nlinks<8) {
+            if (line[2]=='/') snprintf(links[nlinks++],512,"%.511s",line+2);
+            else snprintf(links[nlinks++],512,"/dev/%.506s",line+2);
+        }
+    }
     fclose(f);
+    if (!devpath[0] && arg && !strncmp(arg,"/sys/",5)) {
+        char real[1300];
+        if (realpath(arg,real)) { const char *p=real; if(!strncmp(p,"/sys",4)) p+=4;
+            snprintf(devpath,sizeof devpath,"%.511s",p); }
+    }
+    if (!devname[0] && arg && !strncmp(arg,"/dev/",5)) snprintf(devname,sizeof devname,"%.255s",arg);
+    if (mode && !strcmp(mode,"name")) { if(devname[0]) printf("%s\n",devname); return; }
+    if (mode && !strcmp(mode,"path")) { if(devpath[0]) printf("%s\n",devpath); return; }
+    if (mode && !strcmp(mode,"symlink")) {
+        for(int i=0;i<nlinks;i++) printf("%s%s",i?" ":"",links[i]);
+        printf("\n"); return;
+    }
+    if (mode && (!strcmp(mode,"property")||!strcmp(mode,"env"))) {
+        f=fopen(path,"r");
+        if(f){ while(fgets(line,sizeof line,f)){
+            if(!strncmp(line,"E:",2)) fputs(line+2,stdout); } fclose(f); }
+        return;
+    }
+    if (devpath[0]) printf("P: %s\n",devpath);
+    if (devname[0]) printf("N: %s\n",devname);
+    for(int i=0;i<nlinks;i++) printf("S: %s\n",links[i]);
+    f=fopen(path,"r");
+    if(f){ while(fgets(line,sizeof line,f)){
+        if(!strncmp(line,"E:",2) && strncmp(line+2,"DEVPATH=",8) && strncmp(line+2,"DEVNAME=",8))
+            fputs(line,stdout);
+    } fclose(f); }
 }
 static void cmd_control(const char *action) {
     if (!strcmp(action,"reload")) {
@@ -990,7 +1065,7 @@ int main(int argc, char **argv) {
     }
     int test=0; const char *testfile=NULL, *subsys=NULL, *dbkey=NULL, *ctlact="reload";
     int timeout=120, kernel=0, udev=0;
-    const char *query=NULL; int val_only=0, do_update=0;
+    const char *query=NULL, *infoarg=NULL; int val_only=0, do_update=0;
     for (int i = argi; i<argc; i++) {
         if(!strcmp(argv[i],"--test")){ test=1; if(i+1<argc) testfile=argv[++i]; }
         else if(!strcmp(argv[i],"--rules")){ if(i+1<argc) snprintf(g_rulesdir,sizeof g_rulesdir,"%s",argv[++i]); }
@@ -998,6 +1073,9 @@ int main(int argc, char **argv) {
         else if(!strcmp(argv[i],"--timeout")){ if(i+1<argc) timeout=atoi(argv[++i]); }
         else if(!strncmp(argv[i],"--timeout=",10)){ timeout=atoi(argv[i]+10); }
         else if(!strcmp(argv[i],"--db")){ if(i+1<argc) dbkey=argv[++i]; }
+        else if(!strncmp(argv[i],"--db=",5)){ dbkey=argv[i]+5; }
+        else if(!strcmp(argv[i],"-q") && i+1<argc){ query=argv[++i]; }
+        else if(!strcmp(cmd,"info") && argv[i][0]!='-'){ infoarg=argv[i]; }
         else if(!strcmp(argv[i],"--kernel")||!strcmp(argv[i],"-k")) kernel=1;
         else if(!strcmp(argv[i],"--udev")||!strcmp(argv[i],"-u")) udev=1;
         else if(!strncmp(argv[i],"--query=",8)){ query=argv[i]+8; }
@@ -1176,8 +1254,11 @@ int main(int argc, char **argv) {
     } else if (!strcmp(cmd,"settle")) {
         return cmd_settle(timeout);
     } else if (!strcmp(cmd,"info")) {
-        if(!dbkey){ fprintf(stderr,"usage: udev info --db=cMAJ:MIN\n"); return 1; }
-        cmd_info(dbkey);
+        char key[128];
+        if (dbkey) snprintf(key,sizeof key,"%s",dbkey);
+        else if (infoarg && db_key_from_path(infoarg,key,sizeof key)) { /* resolved */ }
+        else { fprintf(stderr,"usage: udev info <devpath|--db=KEY> [-q property|name|symlink|path]\n"); return 1; }
+        cmd_info(key, query, infoarg);
         return 0;
     } else if (!strcmp(cmd,"control")) {
         cmd_control(ctlact);
