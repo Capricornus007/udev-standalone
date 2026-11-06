@@ -1,0 +1,16 @@
+# Default device-node policy for udev-standalone (self-written; no systemd data).
+# Groups that do not exist are left unchanged by the installer; uaccess grants
+# the logged-in seat user access through elogind/logind ACLs.
+
+SUBSYSTEM=="block", GROUP="disk", MODE="0660"
+KERNEL=="sr*", MODE="0660", TAG+="uaccess"
+KERNEL=="tty*", GROUP="tty", MODE="0620"
+KERNEL=="ptmx", GROUP="tty", MODE="0666"
+SUBSYSTEM=="input", MODE="0660", TAG+="uaccess"
+KERNEL=="uinput", MODE="0660", TAG+="uaccess"
+KERNEL=="kvm", MODE="0660", TAG+="uaccess"
+KERNEL=="fuse", MODE="0666"
+SUBSYSTEM=="sound", MODE="0660", TAG+="uaccess"
+SUBSYSTEM=="drm", MODE="0660", TAG+="uaccess"
+SUBSYSTEM=="video4linux", MODE="0660", TAG+="uaccess"
+SUBSYSTEM=="usb", MODE="0664"

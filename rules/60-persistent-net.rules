@@ -1,0 +1,4 @@
+# Predictable network-interface properties (self-written; net_id builtin only).
+# The kernel interface name is kept; consumers can use ID_NET_NAME_* from the DB.
+
+SUBSYSTEM=="net", IMPORT{builtin}="net_id"

@@ -1,0 +1,4 @@
+# Persistent input-device paths (self-written; path_id builtin only).
+
+SUBSYSTEM=="input", IMPORT{builtin}="path_id"
+SUBSYSTEM=="input", ENV{ID_PATH}=="?*", SYMLINK+="input/by-path/$env{ID_PATH}"

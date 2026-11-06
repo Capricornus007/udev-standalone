@@ -1,0 +1,7 @@
+No vendor hardware database is bundled.
+
+udev-standalone reads plain-text *.hwdb files from /etc/udev/hwdb.d and
+/lib/udev/hwdb.d (or UDEV_HWDB_PATH when testing). Local entries can be dropped
+there; the parser uses simple glob matching and does not need a binary hwdb.bin.
+
+A small demo database lives in examples/hwdb.d/.

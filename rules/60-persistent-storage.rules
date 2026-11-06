@@ -1,0 +1,9 @@
+# Persistent storage symlinks (self-written; uses the clean-room blkid/path_id
+# builtins, no external helper binaries).
+
+SUBSYSTEM=="block", IMPORT{builtin}="blkid"
+SUBSYSTEM=="block", IMPORT{builtin}="path_id"
+
+SUBSYSTEM=="block", ENV{ID_FS_UUID}=="?*", SYMLINK+="disk/by-uuid/$env{ID_FS_UUID}"
+SUBSYSTEM=="block", ENV{ID_FS_LABEL}=="?*", SYMLINK+="disk/by-label/$env{ID_FS_LABEL}"
+SUBSYSTEM=="block", ENV{ID_PATH}=="?*", SYMLINK+="disk/by-path/$env{ID_PATH}"

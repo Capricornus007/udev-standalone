@@ -56,6 +56,10 @@ A **clean-room** device manager that merges two worlds. Licensed under
 - [x] **`udev test-builtin <builtin> <syspath|uevent-file>` subcommand** — run a single
       builtin (`net_id`/`path_id`/`blkid`) against a device and print the environment
       it produces, dry-run only; mirrors `udevadm test-builtin`
+- [x] **rule values expand `$env{KEY}` / `$kernel` / `$devpath` / `$devnode` / `$subsystem` / `$action` / `$driver` / `%k` / `%n`**; KERNEL/ENV/ATTR matches accept `*` and `?` globs
+- [x] **assignments accumulate across rules** (MODE/GROUP/SYMLINK/TAG/RUN are applied once at the event tail), so one rule can set a mode and another can add a symlink or tag
+- [x] **self-written production rules** in `rules/` (device nodes, uaccess tags, disk/input by-path/by-uuid symlinks, net_id properties) — no systemd rules or hwdb data are bundled; demos live in `examples/`
+- [x] **`udev --version` / `udevadm --version`, `udevadm trigger --action=… --type=devices|subsystems`, `udevadm control --exit`** — what the OpenRC boot scripts invoke
 - [x] **real udev database layout** — keys `b/c MAJOR:MINOR`, `nIFINDEX` (network),
       `+subsystem:sysname` (everything else); writes `S:` devlinks, `I:` init time,
       `E:` properties, `G:`/`Q:` tags, so network and non-devnum devices persist too
@@ -72,7 +76,7 @@ A **clean-room** device manager that merges two worlds. Licensed under
       runs the daemon `apply` then reads the produced DB with a libudev-only `udevinfo`
       (by name and by devnum), asserting `ID_PATH`, `ID_FS_TYPE`, queue state, the
       fake `/dev` node, `udev verify`, `udev test`, `udev test-builtin`, and argv[0]
-      personalities — 36/36 checks pass
+      personalities — 45/45 checks pass
 
 ## Build & test
 

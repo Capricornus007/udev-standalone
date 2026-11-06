@@ -21,6 +21,7 @@
    is nothing else to collide with, and keeping the standard path maximizes
    drop-in compatibility with scripts/tools that expect udev's runtime layout. */
 #define UDEV_PIDFILE "/run/udev.pid"
+#define UDEV_VERSION "1.0.0"
 
 /* rundir: where the daemon persists its runtime state (device DB + queue).
    This is the same env var libudev-standalone reads (UDEV_RUNDIR, default
@@ -41,6 +42,11 @@ typedef struct {
     int  ifindex;
     char tags[16][64];
     int  ntags;
+    char symlinks[16][160];
+    int  nsymlinks;
+    char runs[16][160];
+    int  nruns;
+    char mode[16], owner[64], group[64];
     char devlinks[16][256];
     int  ndevlinks;
     int  nenv;
@@ -249,6 +255,7 @@ static void rules_reload(const char *dir) {
 static const char *kernel_name(uevent_t *ue) {
     const char *b = strrchr(ue->devpath,'/'); return b? b+1 : ue->devpath;
 }
+static int glob_match(const char *pat, const char *str);
 static int tok_matches(const char *key, const char *op, const char *val, uevent_t *ue) {
     const char *actual=NULL;
     if (!strcmp(key,"SUBSYSTEM")) actual=ue->subsys;
@@ -265,7 +272,7 @@ static int tok_matches(const char *key, const char *op, const char *val, uevent_
         actual = read_sysattr(ue,ak,buf,sizeof buf);
     }
     if (!actual) actual="";
-    int eq = !strcmp(actual,val);
+    int eq = glob_match(val,actual);
     if (!strcmp(op,"==")) return eq;
     if (!strcmp(op,"!=")) return !eq;
     return 0;
@@ -286,14 +293,50 @@ static void ue_setenv(uevent_t *ue, const char *key, const char *val) {
     if (ue->nenv < UE_MAX_ENV) { snprintf(ue->env[ue->nenv],UE_ENV_LEN,"%s=%s",key,val); ue->nenv++; }
 }
 
+/* Expand udev rule values: $env{KEY}, $kernel, $devpath, $devnode, $subsystem,
+   $action, $driver, %k, %n and %%. */
+static void expand_value(uevent_t *ue, const char *in, char *out, size_t outsz) {
+    size_t o=0;
+    for (size_t i=0; in[i] && o+1<outsz; ) {
+        const char *v=NULL; size_t adv=0;
+        if (!strncmp(in+i,"$env{",5)) {
+            const char *end=strchr(in+i+5,'}');
+            if (end) {
+                char key[64]; size_t kl=(size_t)(end-(in+i+5));
+                if (kl>=sizeof key) kl=sizeof key-1;
+                memcpy(key,in+i+5,kl); key[kl]=0;
+                v=ue_getenv(ue,key); adv=(size_t)(end-in)+1-i;
+            }
+        } else if (!strncmp(in+i,"$kernel",7)) { v=kernel_name(ue); adv=7; }
+        else if (!strncmp(in+i,"$devpath",8)) { v=ue->devpath; adv=8; }
+        else if (!strncmp(in+i,"$devnode",8)) { v=ue->devname; adv=8; }
+        else if (!strncmp(in+i,"$subsystem",10)) { v=ue->subsys; adv=10; }
+        else if (!strncmp(in+i,"$action",7)) { v=ue->action; adv=7; }
+        else if (!strncmp(in+i,"$driver",7)) { v=ue_getenv(ue,"DRIVER"); adv=7; }
+        else if (in[i]=='%' && in[i+1]=='k') { v=kernel_name(ue); adv=2; }
+        else if (in[i]=='%' && in[i+1]=='n') { v=ue->devname; adv=2; }
+        else if (in[i]=='%' && in[i+1]=='%') { if(o+1<outsz) out[o++]='%'; i+=2; continue; }
+        if (adv) {
+            if (v) { size_t vl=strlen(v); if (vl>outsz-1-o) vl=outsz-1-o; memcpy(out+o,v,vl); o+=vl; }
+            i+=adv; continue;
+        }
+        out[o++]=in[i++];
+    }
+    out[o]=0;
+}
+
 /* run a shell command, capture its stdout (capped) into out */
-static int run_capture(const char *cmd, char *out, size_t outsz) {
+static int run_capture(uevent_t *ue, const char *cmd, char *out, size_t outsz) {
     int p[2]; if (pipe(p)<0) return -1;
     pid_t pid = fork();
     if (pid<0){ close(p[0]); close(p[1]); return -1; }
     if (pid==0){
         close(p[0]); dup2(p[1],1); close(p[1]);
-        execl("/bin/sh","sh","-c",cmd,(char*)NULL);
+        char *envp[UE_MAX_ENV+4]; int e=0;
+        for (int i=0;i<ue->nenv && e<UE_MAX_ENV+2;i++) envp[e++]=ue->env[i];
+        envp[e++]="PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
+        envp[e]=NULL;
+        execle("/bin/sh","sh","-c",cmd,(char*)NULL,(char *const*)envp);
         _exit(127);
     }
     close(p[1]);
@@ -312,10 +355,18 @@ static int run_capture(const char *cmd, char *out, size_t outsz) {
 }
 
 /* fire-and-forget: run a shell command detached (used for RUN) */
-static void run_exec(const char *cmd) {
+static void run_exec(uevent_t *ue, const char *cmd) {
     pid_t pid = fork();
     if (pid<0) return;
-    if (pid==0){ setsid(); execl("/bin/sh","sh","-c",cmd,(char*)NULL); _exit(127); }
+    if (pid==0){
+        setsid();
+        char *envp[UE_MAX_ENV+4]; int e=0;
+        for (int i=0;i<ue->nenv && e<UE_MAX_ENV+2;i++) envp[e++]=ue->env[i];
+        envp[e++]="PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
+        envp[e]=NULL;
+        execle("/bin/sh","sh","-c",cmd,(char*)NULL,(char *const*)envp);
+        _exit(127);
+    }
     /* parent does not wait; the detached child reaps itself */
 }
 
@@ -347,6 +398,7 @@ static int glob_match(const char *pat, const char *str) {
             while (*str) { if (glob_match(pat,str)) return 1; str++; }
             return 0;
         }
+        if (*pat=='?') { pat++; str++; continue; }
         if (*pat != *str) return 0;
         pat++; str++;
     }
@@ -544,29 +596,36 @@ static void run_builtin(uevent_t *ue, const char *name) {
 
 /* ===================== actions ===================== */
 static void apply_rule(rule_t *r, uevent_t *ue) {
-    char mode[16]="", owner[64]="", group[64]="", linkname[160]="";
-    ue->ntags = 0;
     for (int i=0;i<r->nasg;i++){
-        if(!strcmp(r->a_key[i],"MODE"))  snprintf(mode,sizeof mode,"%s",r->a_val[i]);
-        else if(!strcmp(r->a_key[i],"OWNER")) snprintf(owner,sizeof owner,"%s",r->a_val[i]);
-        else if(!strcmp(r->a_key[i],"GROUP")) snprintf(group,sizeof group,"%s",r->a_val[i]);
-        else if(!strcmp(r->a_key[i],"SYMLINK")) snprintf(linkname,sizeof linkname,"%s",r->a_val[i]);
-        else if(!strcmp(r->a_key[i],"TAG")) { if(ue->ntags<16) snprintf(ue->tags[ue->ntags++],64,"%s",r->a_val[i]); }
+        char val[256]; expand_value(ue,r->a_val[i],val,sizeof val);
+        if(!strcmp(r->a_key[i],"MODE"))  snprintf(ue->mode,sizeof ue->mode,"%.15s",val);
+        else if(!strcmp(r->a_key[i],"OWNER")) snprintf(ue->owner,sizeof ue->owner,"%.63s",val);
+        else if(!strcmp(r->a_key[i],"GROUP")) snprintf(ue->group,sizeof ue->group,"%.63s",val);
+        else if(!strcmp(r->a_key[i],"SYMLINK")) {
+            if(ue->nsymlinks<16) snprintf(ue->symlinks[ue->nsymlinks++],160,"%.159s",val);
+        }
+        else if(!strcmp(r->a_key[i],"TAG")) {
+            int seen=0;
+            for(int t=0;t<ue->ntags;t++) if(!strcmp(ue->tags[t],val)){ seen=1; break; }
+            if(!seen && ue->ntags<16) snprintf(ue->tags[ue->ntags++],64,"%.63s",val);
+        }
     }
     /* PROGRAM: run and capture stdout into RESULT (visible to later rules via ENV{RESULT}) */
     if (r->program[0]) {
-        char res[1024];
-        if (run_capture(r->program,res,sizeof res)==0 && res[0]) {
+        char cmd[512], res[1024];
+        expand_value(ue,r->program,cmd,sizeof cmd);
+        if (run_capture(ue,cmd,res,sizeof res)==0 && res[0]) {
             ue_setenv(ue,"RESULT",res);
-            if (g_test) printf("       PROGRAM '%s' => RESULT=%s\n", r->program, res);
+            if (g_test) printf("       PROGRAM '%s' => RESULT=%s\n", cmd, res);
         }
     }
     /* IMPORT{file|program|hwdb}: parse KEY=VALUE lines into the uevent env */
     for (int k=0;k<r->nimp;k++){
+        char val[512]; expand_value(ue,r->imp_val[k],val,sizeof val);
         if (!strcmp(r->imp_kind[k],"file")) {
-            FILE *f=fopen(r->imp_val[k],"r");
+            FILE *f=fopen(val,"r");
             if (f){ char ln[512]; while(fgets(ln,sizeof ln,f)){ size_t l=strlen(ln); while(l&&(ln[l-1]=='\n'||ln[l-1]=='\r'))ln[--l]=0; char *eq=strchr(ln,'='); if(eq&&l){*eq=0; ue_setenv(ue,ln,eq+1); if(g_test)printf("       IMPORT %s=%s\n",ln,eq+1);} } fclose(f); }
-            else if (g_test) printf("       IMPORT file '%s' open failed\n", r->imp_val[k]);
+            else if (g_test) printf("       IMPORT file '%s' open failed\n", val);
         } else if (!strcmp(r->imp_kind[k],"hwdb")) {
             const char *m = ue_getenv(ue,"MODALIAS");
             if (m) {
@@ -580,65 +639,76 @@ static void apply_rule(rule_t *r, uevent_t *ue) {
                 }
             } else if (g_test) printf("       IMPORT(hwdb): no MODALIAS in uevent\n");
         } else if (!strcmp(r->imp_kind[k],"builtin")) {
-            char names[160]; snprintf(names,sizeof names,"%s",r->imp_val[k]);
+            char names[160]; snprintf(names,sizeof names,"%.159s",val);
             char *save=NULL;
             for (char *b=strtok_r(names,",",&save); b; b=strtok_r(NULL,",",&save)) run_builtin(ue,b);
         } else {
             char buf[1024];
-            if (run_capture(r->imp_val[k],buf,sizeof buf)==0 && buf[0]){
+            if (run_capture(ue,val,buf,sizeof buf)==0 && buf[0]){
                 char *line=strtok(buf,"\n");
                 while(line){ char *eq=strchr(line,'='); if(eq){*eq=0; ue_setenv(ue,line,eq+1); if(g_test)printf("       IMPORT %s=%s\n",line,eq+1);} line=strtok(NULL,"\n"); }
             }
         }
     }
-    if(!ue->devname[0]) return;
-    char path[512];
-    /* apply mode builds a self-contained fake /dev tree under UDEV_RUNDIR so the
-       result is fully inspectable without touching the real /dev (and without root);
-       the live daemon always creates the real /dev node. */
-    if (g_apply) snprintf(path,sizeof path,"%s/dev/%s", rundir(), ue->devname);
-    else         snprintf(path,sizeof path,"/dev/%s", ue->devname);
-    const char *km = mode[0]? mode : ue_getenv(ue,"MODE");
-    unsigned perm = km? (unsigned)strtol(km,NULL,8) : 0600;
-    if (!g_apply) {
-        printf("[udev] %s action=%s node=%s mode=%o owner=%s group=%s\n",
-            g_test?"TEST":"APPLY", ue->action, path, perm,
-            owner[0]?owner:"(kernel)", group[0]?group:"(kernel)");
-        if (linkname[0]) printf("       symlink -> /dev/%s\n", linkname);
-        if (ue->ntags) { printf("       tags:"); for(int t=0;t<ue->ntags;t++) printf(" %s",ue->tags[t]); printf("\n"); }
-    }
-    /* RUN: execute programs on the event (test mode only prints; apply mode skips) */
     for (int k=0;k<r->nrun;k++){
-        if (g_test) printf("       [would RUN] %s\n", r->run[k]);
-        else if (!g_apply) run_exec(r->run[k]);
+        char val[256]; expand_value(ue,r->run[k],val,sizeof val);
+        if (ue->nruns<16) snprintf(ue->runs[ue->nruns++],160,"%.159s",val);
     }
-    if (g_test) return;   /* --test: print only, never create nodes */
-    /* create the node (apply mode: under rundir/dev; live daemon: /dev) */
-    char *slash=strrchr(path,'/');
-    if (slash && slash!=path){ *slash=0; mkdir(path,0755); *slash='/'; }
-    mode_t ntype = !strcmp(ue->subsys,"block") ? S_IFBLK : S_IFCHR;
-    if (mknod(path, ntype|perm, makedev(ue->major,ue->minor))<0) {
-        if (g_apply) {
-            /* not root in the fake-root test: leave a placeholder file so the node
-               path exists for stat-based clients / inspection */
-            FILE *pf=fopen(path,"w"); if(pf) fclose(pf);
-        } else
-            printf("       mknod failed: %s\n", strerror(errno));
-    } else if (!g_apply) {
-        uid_t u=0; gid_t g=0;
-        if(owner[0]){ struct passwd *pw=getpwnam(owner); if(pw) u=pw->pw_uid; }
-        if(group[0]){ struct group *gr=getgrnam(group); if(gr) g=gr->gr_gid; }
-        chown(path,u,g);
+}
+
+/* Apply the accumulated event state once, after every matching rule has run.
+   This is what makes MODE/GROUP/SYMLINK/TAG from different rules compose. */
+static void apply_event(uevent_t *ue) {
+    int has_node = ue->devname[0] && (ue->major || ue->minor);
+    char path[512]="";
+    if (has_node) {
+        /* apply mode builds a self-contained fake /dev tree under UDEV_RUNDIR so the
+           result is fully inspectable without touching the real /dev (and without root);
+           the live daemon always creates the real /dev node. */
+        if (g_apply) snprintf(path,sizeof path,"%s/dev/%s", rundir(), ue->devname);
+        else         snprintf(path,sizeof path,"/dev/%s", ue->devname);
     }
-    if (linkname[0]) {
-        char sp[512];
-        if (g_apply) snprintf(sp,sizeof sp,"%s/dev/%s", rundir(), linkname);
-        else         snprintf(sp,sizeof sp,"/dev/%s", linkname);
-        char *ss=strrchr(sp,'/'); if(ss&&ss!=sp){*ss=0; mkdir(sp,0755); *ss='/';}
-        symlink(path, sp);
-        if (ue->ndevlinks < 16)
-            snprintf(ue->devlinks[ue->ndevlinks++], 256, "%s", linkname);
+    const char *km = ue->mode[0]? ue->mode : ue_getenv(ue,"MODE");
+    unsigned perm = km? (unsigned)strtol(km,NULL,8) : 0600;
+    if (g_test) {
+        if (has_node) {
+            printf("[udev] TEST action=%s node=%s mode=%o owner=%s group=%s\n",
+                ue->action, path, perm,
+                ue->owner[0]?ue->owner:"(kernel)", ue->group[0]?ue->group:"(kernel)");
+            for (int i=0;i<ue->nsymlinks;i++) printf("       symlink -> /dev/%s\n", ue->symlinks[i]);
+        }
+        if (ue->ntags) { printf("       tags:"); for(int t=0;t<ue->ntags;t++) printf(" %s",ue->tags[t]); printf("\n"); }
+        for (int i=0;i<ue->nruns;i++) printf("       [would RUN] %s\n", ue->runs[i]);
+        return;
     }
+    if (has_node) {
+        char *slash=strrchr(path,'/');
+        if (slash && slash!=path){ *slash=0; mkdir(path,0755); *slash='/'; }
+        mode_t ntype = !strcmp(ue->subsys,"block") ? S_IFBLK : S_IFCHR;
+        if (mknod(path, ntype|perm, makedev(ue->major,ue->minor))<0) {
+            if (g_apply) {
+                /* not root in the fake-root test: leave a placeholder file so the node
+                   path exists for stat-based clients / inspection */
+                FILE *pf=fopen(path,"w"); if(pf) fclose(pf);
+            } else
+                printf("       mknod failed: %s\n", strerror(errno));
+        } else if (!g_apply) {
+            uid_t u=0; gid_t g=0;
+            if(ue->owner[0]){ struct passwd *pw=getpwnam(ue->owner); if(pw) u=pw->pw_uid; }
+            if(ue->group[0]){ struct group *gr=getgrnam(ue->group); if(gr) g=gr->gr_gid; }
+            chown(path,u,g);
+        }
+        for (int i=0;i<ue->nsymlinks;i++){
+            char sp[512];
+            if (g_apply) snprintf(sp,sizeof sp,"%s/dev/%s", rundir(), ue->symlinks[i]);
+            else         snprintf(sp,sizeof sp,"/dev/%s", ue->symlinks[i]);
+            char *ss=strrchr(sp,'/'); if(ss&&ss!=sp){*ss=0; mkdir(sp,0755); *ss='/';}
+            symlink(path, sp);
+            if (ue->ndevlinks < 16)
+                snprintf(ue->devlinks[ue->ndevlinks++], 256, "%s", ue->symlinks[i]);
+        }
+    }
+    for (int i=0;i<ue->nruns;i++) if (!g_apply) run_exec(ue,ue->runs[i]);
 }
 
 /* ===================== device DB ===================== */
@@ -730,8 +800,10 @@ static void monitor_send(const char *buf, ssize_t len) {
 /* ===================== queue state (seed for udev_queue_*) ===================== */
 static volatile int g_pending = 0;
 static volatile int g_reload = 0;
+static volatile sig_atomic_t g_stop = 0;
 static int g_seqnum = 0;          /* monotonic udev event seqnum for udev_queue_* */
 static void on_sighup(int s){ (void)s; g_reload = 1; }
+static void on_sigterm(int s){ (void)s; g_stop = 1; }
 
 /* Persist queue state so a libudev client (route Y) can read it without the
    daemon's internal memory: /run/udev/queue holds SEQNUM + QUEUE_LENGTH.
@@ -747,7 +819,11 @@ static void queue_write_state(void) {
 
 /* ===================== admin subcommands ===================== */
 /* re-trigger: walk /sys/devices and write "add" into every uevent file */
-static void trigger_walk(const char *dir) {
+static void trigger_write(const char *uev, const char *action) {
+    FILE *f=fopen(uev,"w");
+    if(f){ fputs(action,f); fputc('\n',f); fclose(f); }
+}
+static void trigger_walk(const char *dir, const char *action) {
     DIR *d = opendir(dir); if(!d) return;
     struct dirent *e;
     while ((e=readdir(d))) {
@@ -756,9 +832,21 @@ static void trigger_walk(const char *dir) {
         struct stat st; if (stat(path,&st)<0) continue;
         if (S_ISDIR(st.st_mode)) {
             char uev[600]; snprintf(uev,sizeof uev,"%s/uevent",path);
-            if (access(uev,F_OK)==0) { FILE *f=fopen(uev,"w"); if(f){ fputs("add\n",f); fclose(f); } }
-            trigger_walk(path);
+            if (access(uev,F_OK)==0) trigger_write(uev,action);
+            trigger_walk(path,action);
         }
+    }
+    closedir(d);
+}
+/* --type=subsystems: write the action to /sys/bus/<name>/uevent */
+static void trigger_subsystems(const char *action) {
+    const char *base="/sys/bus";
+    DIR *d=opendir(base); if(!d) return;
+    struct dirent *e;
+    while ((e=readdir(d))) {
+        if (e->d_name[0]=='.') continue;
+        char uev[600]; snprintf(uev,sizeof uev,"%s/%s/uevent",base,e->d_name);
+        if (access(uev,F_OK)==0) trigger_write(uev,action);
     }
     closedir(d);
 }
@@ -865,11 +953,33 @@ static void cmd_info(const char *dbkey, const char *mode, const char *arg) {
             fputs(line,stdout);
     } fclose(f); }
 }
+/* Only signal a daemon that is actually this binary. On a system that still
+   carries another udev implementation, /run/udev.pid belongs to it; refusing to
+   touch it keeps a migration/test session from disrupting the running system. */
+static int standalone_daemon_pid(void) {
+    FILE *p=fopen(UDEV_PIDFILE,"r");
+    if(!p) return 0;
+    int pid=0; int ok=(fscanf(p,"%d",&pid)==1); fclose(p);
+    if(!ok || pid<=0) return 0;
+    char cpath[64], comm[32]="";
+    snprintf(cpath,sizeof cpath,"/proc/%d/comm",pid);
+    FILE *c=fopen(cpath,"r");
+    if(c){ if(fscanf(c,"%31s",comm)!=1) comm[0]=0; fclose(c); }
+    if(strcmp(comm,"udev")) {
+        printf("refusing to signal pid %d (comm '%s', not this daemon)\n",pid,comm);
+        return 0;
+    }
+    return pid;
+}
 static void cmd_control(const char *action) {
     if (!strcmp(action,"reload")) {
-        FILE *p=fopen(UDEV_PIDFILE,"r");
-        if(p){ int pid; fscanf(p,"%d",&pid); fclose(p); kill(pid,SIGHUP); printf("sent SIGHUP to %d\n",pid); }
-        else printf("no daemon pidfile (%s)\n", UDEV_PIDFILE);
+        int pid=standalone_daemon_pid();
+        if(pid>0){ if(kill(pid,SIGHUP)==0) printf("sent SIGHUP to %d\n",pid); else perror("kill"); }
+        else printf("no standalone daemon pidfile (%s)\n", UDEV_PIDFILE);
+    } else if (!strcmp(action,"exit")) {
+        int pid=standalone_daemon_pid();
+        if(pid>0){ if(kill(pid,SIGTERM)==0) printf("sent SIGTERM to %d\n",pid); else perror("kill"); }
+        else printf("no standalone daemon pidfile (%s)\n", UDEV_PIDFILE);
     } else printf("unknown control action: %s\n",action);
 }
 
@@ -926,6 +1036,7 @@ static int process_uevent(uevent_t *ue) {
         }
         i++;
     }
+    apply_event(ue);
     if (!strcmp(ue->action,"remove")) db_remove(ue); else db_write(ue);
     if (is_add && g_pending>0) g_pending--;
     queue_write_state();
@@ -1050,6 +1161,10 @@ int main(int argc, char **argv) {
     /* argv[0] personality: systemd ships udevd/udevadm/udev-hwdb as one ELF
        dispatched by the invoked name. Mirror that so symlinks are drop-in. */
     const char *prog = strrchr(argv[0], '/'); prog = prog ? prog + 1 : argv[0];
+    if (argc>1 && (!strcmp(argv[1],"--version") || !strcmp(argv[1],"-V"))) {
+        printf("udev %s\n", UDEV_VERSION);
+        return 0;
+    }
     const char *cmd;
     int argi;
     if (!strcmp(prog,"udevadm")) {
@@ -1066,6 +1181,7 @@ int main(int argc, char **argv) {
     int test=0; const char *testfile=NULL, *subsys=NULL, *dbkey=NULL, *ctlact="reload";
     int timeout=120, kernel=0, udev=0;
     const char *query=NULL, *infoarg=NULL; int val_only=0, do_update=0;
+    const char *tract="add"; int trsub=0;
     for (int i = argi; i<argc; i++) {
         if(!strcmp(argv[i],"--test")){ test=1; if(i+1<argc) testfile=argv[++i]; }
         else if(!strcmp(argv[i],"--rules")){ if(i+1<argc) snprintf(g_rulesdir,sizeof g_rulesdir,"%s",argv[++i]); }
@@ -1075,6 +1191,12 @@ int main(int argc, char **argv) {
         else if(!strcmp(argv[i],"--db")){ if(i+1<argc) dbkey=argv[++i]; }
         else if(!strncmp(argv[i],"--db=",5)){ dbkey=argv[i]+5; }
         else if(!strcmp(argv[i],"-q") && i+1<argc){ query=argv[++i]; }
+        else if(!strcmp(argv[i],"--exit")){ ctlact="exit"; }
+        else if(!strcmp(argv[i],"--reload")){ ctlact="reload"; }
+        else if(!strncmp(argv[i],"--action=",9)){ tract=argv[i]+9; }
+        else if(!strcmp(argv[i],"--action") && i+1<argc){ tract=argv[++i]; }
+        else if(!strncmp(argv[i],"--type=",7)){ trsub=!strcmp(argv[i]+7,"subsystems"); }
+        else if(!strcmp(argv[i],"--type") && i+1<argc){ trsub=!strcmp(argv[++i],"subsystems"); }
         else if(!strcmp(cmd,"info") && argv[i][0]!='-'){ infoarg=argv[i]; }
         else if(!strcmp(argv[i],"--kernel")||!strcmp(argv[i],"-k")) kernel=1;
         else if(!strcmp(argv[i],"--udev")||!strcmp(argv[i],"-u")) udev=1;
@@ -1096,7 +1218,7 @@ int main(int argc, char **argv) {
        This MUST run before the daemon/trigger branches below, otherwise a bare
        `udev --test` (where argv[1] starts with '-' and cmd defaults to
        "daemon") would fall into the netlink recv() loop and hang. */
-    if (test) {
+    if (test && !strcmp(cmd,"daemon")) {
         if (!testfile) { fprintf(stderr, "usage: udev --test <uevent-file>\n"); return 1; }
         FILE *tf = fopen(testfile, "rb");
         if (!tf) { fprintf(stderr, "cannot open test file: %s\n", testfile); return 1; }
@@ -1233,12 +1355,17 @@ int main(int argc, char **argv) {
 
     if (!strcmp(cmd,"daemon")) {
         signal(SIGHUP, on_sighup);
+        struct sigaction sa; memset(&sa,0,sizeof sa);
+        sa.sa_handler=on_sigterm;
+        sigemptyset(&sa.sa_mask);
+        sigaction(SIGTERM,&sa,NULL);
+        sigaction(SIGINT,&sa,NULL);
         int fd = netlink_setup();
         if (fd<0){ perror("netlink setup (need root/CAP_NET_ADMIN)"); return 1; }
         if (monitor_setup() < 0) fprintf(stderr, "warning: monitor rebroadcast unavailable\n");
         if (geteuid()==0){ FILE *pf=fopen(UDEV_PIDFILE,"w"); if(pf){ fprintf(pf,"%d",getpid()); fclose(pf); } }
         char buf[8192];
-        for (;;) {
+        while (!g_stop) {
             ssize_t n = recv(fd,buf,sizeof buf-1,0);
             if (n<=0) continue;
             uevent_t ue; if (ue_parse(buf,n,&ue)<0) continue;
@@ -1246,9 +1373,11 @@ int main(int argc, char **argv) {
             monitor_send(buf, n);
             if (g_reload) { rules_reload(g_rulesdir); g_reload=0; fprintf(stderr,"rules reloaded\n"); }
         }
+        if (geteuid()==0) unlink(UDEV_PIDFILE);
     } else if (!strcmp(cmd,"trigger")) {
-        if (test) { printf("[trigger dry-run] would walk /sys/devices and write 'add' to uevent files (subsys=%s)\n", subsys?subsys:"*"); return 0; }
-        trigger_walk("/sys/devices");
+        if (test) { printf("[trigger dry-run] would write '%s' to %s uevent files (subsys=%s)\n",
+                          tract, trsub?"/sys/bus/*":"/sys/devices", subsys?subsys:"*"); return 0; }
+        if (trsub) trigger_subsystems(tract); else trigger_walk("/sys/devices", tract);
         printf("trigger done\n");
         return 0;
     } else if (!strcmp(cmd,"settle")) {
