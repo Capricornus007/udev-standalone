@@ -6,4 +6,4 @@ SUBSYSTEM=="input", PROGRAM="/bin/echo captured-value", IMPORT{program}="/bin/ec
 # GOTO/LABEL: when this matches, jump past the rule below so its TAG is skipped
 SUBSYSTEM=="input", GOTO="end"
 SUBSYSTEM=="input", TAG+="skipped-by-goto"
-LABEL="end"
+SUBSYSTEM=="input", LABEL="end"

@@ -313,6 +313,91 @@ static int find_label(const char *lbl) {
     return -1;
 }
 
+/* ===================== hwdb (unifies udev-hwdb / udevadm hwdb) =====================
+   Clean-room TEXT-mode hwdb: parse the hwdb.d database files (modalias/property entries);
+   match a query by glob, and import matched properties. We query the text files
+   directly (no binary hwdb.bin index) — sufficient for a drop-in replacement of
+   `udevadm hwdb --query`. */
+typedef struct {
+    char match[256];
+    char prop[32][256];
+    int  nprop;
+} hwdb_entry_t;
+static hwdb_entry_t *HW=NULL; static int HWn=0, HWcap=0, HWloaded=0;
+static const char *g_hwdbdir=NULL;   /* optional override (testing / staging) */
+
+/* glob matcher supporting '*' (systemd hwdb match keys use shell-style globs) */
+static int glob_match(const char *pat, const char *str) {
+    while (*pat && *str) {
+        if (*pat=='*') {
+            if (!*++pat) return 1;
+            while (*str) { if (glob_match(pat,str)) return 1; str++; }
+            return 0;
+        }
+        if (*pat != *str) return 0;
+        pat++; str++;
+    }
+    while (*pat=='*') pat++;          /* trailing stars match anything */
+    return *pat==0 && *str==0;
+}
+
+static void hwdb_load_file(const char *path) {
+    FILE *f=fopen(path,"r"); if(!f) return;
+    char line[1024]; hwdb_entry_t cur; memset(&cur,0,sizeof cur); int have=0;
+    while (fgets(line,sizeof line,f)) {
+        size_t L=strlen(line); while(L&&(line[L-1]=='\n'||line[L-1]=='\r')) line[--L]=0;
+        char *raw=line; while(*raw==' '||*raw=='\t') raw++;
+        if (*raw==0 || *raw=='#') continue;
+        int indented = (raw != line);          /* property lines are indented */
+        if (!indented && strchr(raw,'=')==NULL) {
+            if (have) {
+                if (HWn>=HWcap){ HWcap=HWcap?HWcap*2:16; HW=realloc(HW,HWcap*sizeof(hwdb_entry_t)); }
+                HW[HWn++]=cur;
+            }
+            memset(&cur,0,sizeof cur); snprintf(cur.match,sizeof cur.match,"%s",raw); have=1;
+        } else if (have && strchr(raw,'=')) {
+            if (cur.nprop<32) snprintf(cur.prop[cur.nprop++],256,"%s",raw);
+        }
+    }
+    if (have) {
+        if (HWn>=HWcap){ HWcap=HWcap?HWcap*2:16; HW=realloc(HW,HWcap*sizeof(hwdb_entry_t)); }
+        HW[HWn++]=cur;
+    }
+    fclose(f);
+}
+static void hwdb_load_dir(const char *dir) {
+    DIR *d=opendir(dir); if(!d) return;
+    char *names[256]; int n=0; struct dirent *e;
+    while((e=readdir(d)) && n<256){ size_t L=strlen(e->d_name); if(L>5 && !strcmp(e->d_name+L-5,".hwdb")) names[n++]=strdup(e->d_name); }
+    closedir(d);
+    qsort(names,n,sizeof(char*),cmp_str);
+    char path[512];
+    for(int i=0;i<n;i++){ snprintf(path,sizeof path,"%s/%s",dir,names[i]); hwdb_load_file(path); free(names[i]); }
+}
+static void hwdb_load_all(void) {
+    if (HWloaded) return;
+    if (g_hwdbdir) hwdb_load_dir(g_hwdbdir);   /* --hwdbdir overrides the standard dirs (testing/staging) */
+    else {
+        hwdb_load_dir("/etc/udev/hwdb.d");
+        hwdb_load_dir("/lib/udev/hwdb.d");
+    }
+    HWloaded=1;
+}
+static void cmd_hwdb_query(const char *modalias, int val_only) {
+    hwdb_load_all();
+    int found=0;
+    for (int i=0;i<HWn;i++){
+        if (glob_match(HW[i].match, modalias)) {
+            found++;
+            for (int p=0;p<HW[i].nprop;p++){
+                if (val_only){ char *eq=strchr(HW[i].prop[p],'='); printf("%s\n", eq?eq+1:HW[i].prop[p]); }
+                else printf("%s\n", HW[i].prop[p]);
+            }
+        }
+    }
+    if (!found) printf("(no hwdb match for %s)\n", modalias);
+}
+
 /* ===================== actions ===================== */
 static int g_test=0;
 static void apply_rule(rule_t *r, uevent_t *ue) {
@@ -333,12 +418,24 @@ static void apply_rule(rule_t *r, uevent_t *ue) {
             if (g_test) printf("       PROGRAM '%s' => RESULT=%s\n", r->program, res);
         }
     }
-    /* IMPORT{program|file}: parse KEY=VALUE lines into the uevent env */
+    /* IMPORT{file|program|hwdb}: parse KEY=VALUE lines into the uevent env */
     for (int k=0;k<r->nimp;k++){
         if (!strcmp(r->imp_kind[k],"file")) {
             FILE *f=fopen(r->imp_val[k],"r");
             if (f){ char ln[512]; while(fgets(ln,sizeof ln,f)){ size_t l=strlen(ln); while(l&&(ln[l-1]=='\n'||ln[l-1]=='\r'))ln[--l]=0; char *eq=strchr(ln,'='); if(eq&&l){*eq=0; ue_setenv(ue,ln,eq+1); if(g_test)printf("       IMPORT %s=%s\n",ln,eq+1);} } fclose(f); }
             else if (g_test) printf("       IMPORT file '%s' open failed\n", r->imp_val[k]);
+        } else if (!strcmp(r->imp_kind[k],"hwdb")) {
+            const char *m = ue_getenv(ue,"MODALIAS");
+            if (m) {
+                for (int h=0;h<HWn;h++){
+                    if (glob_match(HW[h].match,m)){
+                        for (int p=0;p<HW[h].nprop;p++){
+                            char pk[200]; snprintf(pk,sizeof pk,"%s",HW[h].prop[p]); char *eq=strchr(pk,'=');
+                            if (eq && *eq){ *eq=0; ue_setenv(ue,pk,eq+1); if(g_test)printf("       IMPORT(hwdb) %s=%s\n",pk,eq+1); }
+                        }
+                    }
+                }
+            } else if (g_test) printf("       IMPORT(hwdb): no MODALIAS in uevent\n");
         } else {
             char buf[1024];
             if (run_capture(r->imp_val[k],buf,sizeof buf)==0 && buf[0]){
@@ -540,6 +637,7 @@ int main(int argc, char **argv) {
     const char *cmd = (argc>1 && argv[1][0]!='-') ? argv[1] : "daemon";
     int test=0; const char *testfile=NULL, *subsys=NULL, *dbkey=NULL, *ctlact="reload";
     int timeout=120, kernel=0, udev=0;
+    const char *query=NULL; int val_only=0, do_update=0;
     for (int i = (strcmp(cmd,"daemon")==0)?1:2; i<argc; i++) {
         if(!strcmp(argv[i],"--test")){ test=1; if(i+1<argc) testfile=argv[++i]; }
         else if(!strcmp(argv[i],"--rules")){ if(i+1<argc) g_rulesdir=argv[++i]; }
@@ -548,10 +646,16 @@ int main(int argc, char **argv) {
         else if(!strcmp(argv[i],"--db")){ if(i+1<argc) dbkey=argv[++i]; }
         else if(!strcmp(argv[i],"--kernel")||!strcmp(argv[i],"-k")) kernel=1;
         else if(!strcmp(argv[i],"--udev")||!strcmp(argv[i],"-u")) udev=1;
+        else if(!strncmp(argv[i],"--query=",8)){ query=argv[i]+8; }
+        else if(!strcmp(argv[i],"--query")){ if(i+1<argc) query=argv[++i]; }
+        else if(!strcmp(argv[i],"--value")) val_only=1;
+        else if(!strcmp(argv[i],"--update")) do_update=1;
+        else if(!strncmp(argv[i],"--hwdbdir=",10)){ g_hwdbdir=argv[i]+10; }
         else if(!strcmp(argv[i],"--action")){ /* reserved */ }
     }
     g_test = test;
     load_dir(g_rulesdir);
+    hwdb_load_all();
 
     /* --test: parse a sample uevent file and run the rule engine, then exit.
        This MUST run before the daemon/trigger branches below, otherwise a bare
@@ -611,9 +715,18 @@ int main(int argc, char **argv) {
     } else if (!strcmp(cmd,"monitor")) {
         cmd_monitor(kernel, udev);
         return 0;
+    } else if (!strcmp(cmd,"hwdb")) {
+        if (do_update) {
+            hwdb_load_all();
+            printf("hwdb: loaded %d entries (text query mode — no binary cache built)\n", HWn);
+            return 0;
+        }
+        if (!query){ fprintf(stderr,"usage: udev hwdb --query=MODALIAS [--property|--value]\n"); return 1; }
+        cmd_hwdb_query(query, val_only);
+        return 0;
     } else {
         fprintf(stderr,"unknown command: %s\n",cmd);
-        fprintf(stderr,"usage: udev [daemon|trigger|settle|info|control|monitor] [options]\n");
+        fprintf(stderr,"usage: udev [daemon|trigger|settle|info|control|monitor|hwdb] [options]\n");
         return 1;
     }
     return 0;

@@ -1,0 +1,2 @@
+# milestone 7: import hwdb database properties for devices that carry a MODALIAS
+SUBSYSTEM=="usb", IMPORT{hwdb}=""

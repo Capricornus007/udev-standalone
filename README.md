@@ -11,7 +11,7 @@ A **clean-room** device manager that merges two worlds. Licensed under
   (the rich rule language: `SUBSYSTEM`/`KERNEL`/`ACTION`/`ENV{}` matching,
   `==`/`!=`/`=`/`+=`/`:=` operators, `MODE`/`OWNER`/`GROUP` actions).
 
-## Status (milestone 6)
+## Status (milestone 7)
 
 - [x] netlink uevent listener (kernel → userspace)
 - [x] rules.d parser + matcher (`SUBSYSTEM`/`KERNEL`/`ACTION`/`ENV{}`)
@@ -28,7 +28,8 @@ A **clean-room** device manager that merges two worlds. Licensed under
 - [x] pending-event counter (seed of the `udev_queue_*` state machine)
 - [x] rule actions: `PROGRAM` (capture stdout → `RESULT`), `IMPORT{program|file}` (parse KEY=VALUE into env), `RUN` (execute on event)
 - [x] rule control flow: `GOTO`/`LABEL` (shared `process_uevent()` used by daemon + `--test`)
-- [ ] hwdb lookups, builtins (net_id / path_id / blkid)
+- [x] hwdb text-database query (`udev hwdb --query=MODALIAS [--value]`) + `IMPORT{hwdb}` rule action
+- [ ] builtins (net_id / path_id / blkid)
 - [ ] full `udev_queue_*` seqnum state machine (the 17 symbols Y-libudev needs)
 
 ## Build & test
