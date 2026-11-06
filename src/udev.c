@@ -888,6 +888,11 @@ int main(int argc, char **argv) {
         if (ue_parse(buf, (ssize_t)rn, &ue) < 0) { fprintf(stderr, "failed to parse uevent\n"); return 1; }
         char dd[320]; snprintf(dd, sizeof dd, "%s/data", rundir());
         mkdir(rundir(), 0755); mkdir(dd, 0755);
+        /* continue the udev seqnum from any prior queue state, so repeated apply
+           runs advance a monotonic counter as a long-running daemon would */
+        { char qp[512]; snprintf(qp,sizeof qp,"%s/queue",rundir());
+          FILE *qf=fopen(qp,"r");
+          if(qf){ char l[256]; while(fgets(l,sizeof l,qf)){ if(!strncmp(l,"SEQNUM=",7)){ g_seqnum=(int)strtol(l+7,NULL,10); break; } } fclose(qf); } }
         g_test = 0; g_apply = 1;
         int matched = process_uevent(&ue);
         if (ue.major || ue.minor)
