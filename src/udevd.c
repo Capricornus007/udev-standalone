@@ -213,6 +213,45 @@ static int netlink_setup(void) {
     return fd;
 }
 
+/* rebroadcast socket: send uevents to multicast group 4 so libudev clients
+   (Y-libudev / libudev-zero) can monitor devices — same group mdevd uses (-O 4). */
+static int monitor_fd = -1;
+static int monitor_setup(void) {
+    monitor_fd = socket(AF_NETLINK, SOCK_RAW, NETLINK_KOBJECT_UEVENT);
+    if (monitor_fd < 0) return -1;
+    struct sockaddr_nl nl; memset(&nl,0,sizeof nl);
+    nl.nl_family = AF_NETLINK;
+    nl.nl_groups = 4;
+    if (bind(monitor_fd,(struct sockaddr*)&nl,sizeof nl) < 0) { close(monitor_fd); monitor_fd=-1; return -1; }
+    return 0;
+}
+static void monitor_send(const char *buf, ssize_t len) {
+    if (monitor_fd < 0) return;
+    struct sockaddr_nl dst; memset(&dst,0,sizeof dst);
+    dst.nl_family = AF_NETLINK;
+    dst.nl_groups = 4;
+    sendto(monitor_fd, buf, (size_t)len, 0, (struct sockaddr*)&dst, sizeof dst);
+}
+
+/* persistent device database, udev-compatible layout under /run/udev/data/ */
+static void db_write(uevent_t *ue) {
+    if (g_test) return;
+    if (ue->major==0 && ue->minor==0) return;
+    char path[256];
+    snprintf(path, sizeof path, "/run/udev/data/c%d:%d", ue->major, ue->minor);
+    FILE *f = fopen(path,"w");
+    if (!f) return;
+    for (int i=0;i<ue->nenv;i++) fprintf(f, "E:%s\n", ue->env[i]);
+    fclose(f);
+}
+static void db_remove(uevent_t *ue) {
+    if (g_test) return;
+    if (ue->major==0 && ue->minor==0) return;
+    char path[256];
+    snprintf(path, sizeof path, "/run/udev/data/c%d:%d", ue->major, ue->minor);
+    unlink(path);
+}
+
 /* ===================== main ===================== */
 int main(int argc, char **argv) {
     int test=0; const char *testfile=NULL;
@@ -242,11 +281,14 @@ int main(int argc, char **argv) {
 
     int fd = netlink_setup();
     if (fd<0){ perror("netlink setup (need root/CAP_NET_ADMIN)"); return 1; }
+    if (monitor_setup() < 0) fprintf(stderr, "warning: monitor rebroadcast unavailable\n");
     char buf[8192];
     for (;;) {
         ssize_t n = recv(fd,buf,sizeof buf-1,0);
         if (n<=0) continue;
         uevent_t ue; if (ue_parse(buf,n,&ue)<0) continue;
         for (int i=0;i<RS.n;i++) if (rule_matches(&RS.r[i],&ue)) apply_rule(&RS.r[i],&ue);
+        monitor_send(buf, n);
+        if (!strcmp(ue.action,"remove")) db_remove(&ue); else db_write(&ue);
     }
 }
