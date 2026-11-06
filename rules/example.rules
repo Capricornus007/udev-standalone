@@ -1,5 +1,5 @@
 # milestone sample rules
-# give input devices to group 'input', mode 0660
-SUBSYSTEM=="input", MODE="0660", GROUP="input"
+# give input devices to group 'input', mode 0660, symlink + tag
+SUBSYSTEM=="input", MODE="0660", GROUP="input", SYMLINK+="input/mouse", TAG+="uaccess"
 # ttys to group tty, mode 0660
 SUBSYSTEM=="tty", GROUP="tty", MODE="0660"

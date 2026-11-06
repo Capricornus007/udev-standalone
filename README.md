@@ -20,9 +20,11 @@ A **clean-room** device manager that merges two worlds. Licensed under
 - [x] persistent device DB (`/run/udev/data/cMAJ:MIN`, udev-compatible layout)
 - [ ] `udev_queue_*` seqnum state machine
 - [x] rules.d directory loading (lexical merge of `*.rules`)
+- [x] `ATTR{}` match, `SYMLINK` create, `TAG` record (udev_enumerate ready)
 - [ ] live reload on `SIGHUP`
-- [ ] `ATTR{}`/`IMPORT`/`GOTO`/`LABEL`/`SYMLINK`/`RUN`/`PROGRAM`
+- [ ] `IMPORT`/`GOTO`/`LABEL`/`RUN`/`PROGRAM`
 - [ ] hwdb lookups, builtins (net_id / path_id / blkid)
+- [ ] `udev_queue_*` seqnum state machine (the 17 symbols Y-libudev needs)
 
 ## Build & test
 

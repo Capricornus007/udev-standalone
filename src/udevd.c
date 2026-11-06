@@ -21,6 +21,8 @@ typedef struct {
     char subsys[64];
     char devname[128];
     int  major, minor;
+    char tags[16][64];
+    int  ntags;
     int  nenv;
     char env[UE_MAX_ENV][UE_ENV_LEN];
 } uevent_t;
@@ -31,6 +33,14 @@ static const char *ue_getenv(uevent_t *ue, const char *key) {
         if (strncmp(ue->env[i], key, kl) == 0 && ue->env[i][kl] == '=')
             return ue->env[i] + kl + 1;
     return NULL;
+}
+
+/* read a sysfs attribute relative to the device: /sys<devpath>/<attr> */
+static const char *read_sysattr(uevent_t *ue, const char *attr, char *out, size_t sz) {
+    char p[512]; snprintf(p,sizeof p,"/sys%s/%s",ue->devpath,attr);
+    FILE *f=fopen(p,"r"); if(!f) return NULL;
+    size_t n=fread(out,1,sz-1,f); if(n>0 && out[n-1]=='\n') n--; out[n]=0; fclose(f);
+    return out[0]? out : NULL;
 }
 
 /* buf is a sequence of NUL-separated strings:
@@ -182,8 +192,11 @@ static int tok_matches(const char *key, const char *op, const char *val, uevent_
         char ek[64]; snprintf(ek,sizeof ek,"%s",key+4);
         char *c=strchr(ek,'}'); if(c)*c=0;
         actual=ue_getenv(ue,ek);
-    } else if (!strncmp(key,"ATTR{",5)) {
-        actual=NULL; /* milestone: ATTR lookup not yet implemented */
+    }     else if (!strncmp(key,"ATTR{",5)) {
+        char ak[128]; snprintf(ak,sizeof ak,"%s",key+5);
+        char *c=strchr(ak,'}'); if(c)*c=0;
+        static char buf[256];
+        actual = read_sysattr(ue,ak,buf,sizeof buf);
     }
     if (!actual) actual="";
     int eq = !strcmp(actual,val);
@@ -200,12 +213,15 @@ static int rule_matches(rule_t *r, uevent_t *ue) {
 /* ===================== actions ===================== */
 static int g_test=0;
 static void apply_rule(rule_t *r, uevent_t *ue) {
-    char mode[16]="", owner[64]="", group[64]="";
+    char mode[16]="", owner[64]="", group[64]="", linkname[160]="";
+    ue->ntags = 0;
     for (int i=0;i<r->nasg;i++){
         if(!strcmp(r->a_key[i],"MODE"))  snprintf(mode,sizeof mode,"%s",r->a_val[i]);
         else if(!strcmp(r->a_key[i],"OWNER")) snprintf(owner,sizeof owner,"%s",r->a_val[i]);
         else if(!strcmp(r->a_key[i],"GROUP")) snprintf(group,sizeof group,"%s",r->a_val[i]);
-        /* SYMLINK/RUN/PROGRAM/IMPORT/GOTO -> milestone TODO */
+        else if(!strcmp(r->a_key[i],"SYMLINK")) snprintf(linkname,sizeof linkname,"%s",r->a_val[i]);
+        else if(!strcmp(r->a_key[i],"TAG")) { if(ue->ntags<16) snprintf(ue->tags[ue->ntags++],64,"%s",r->a_val[i]); }
+        /* RUN/PROGRAM/IMPORT/GOTO -> milestone TODO */
     }
     if(!ue->devname[0]) return;
     char path[512]; snprintf(path,sizeof path,"/dev/%s",ue->devname);
@@ -214,6 +230,8 @@ static void apply_rule(rule_t *r, uevent_t *ue) {
     printf("[udevd] %s action=%s node=%s mode=%o owner=%s group=%s\n",
         g_test?"TEST":"APPLY", ue->action, path, perm,
         owner[0]?owner:"(kernel)", group[0]?group:"(kernel)");
+    if (linkname[0]) printf("        symlink -> /dev/%s\n", linkname);
+    if (ue->ntags) { printf("        tags:"); for(int t=0;t<ue->ntags;t++) printf(" %s",ue->tags[t]); printf("\n"); }
     if (g_test) return;
     char *slash=strrchr(path,'/');
     if (slash && slash!=path){ *slash=0; mkdir(path,0755); *slash='/'; }
@@ -224,6 +242,11 @@ static void apply_rule(rule_t *r, uevent_t *ue) {
         if(owner[0]){ struct passwd *pw=getpwnam(owner); if(pw) u=pw->pw_uid; }
         if(group[0]){ struct group *gr=getgrnam(group); if(gr) g=gr->gr_gid; }
         chown(path,u,g);
+    }
+    if (linkname[0]) {
+        char sp[512]; snprintf(sp,sizeof sp,"/dev/%s",linkname);
+        char *ss=strrchr(sp,'/'); if(ss&&ss!=sp){*ss=0; mkdir(sp,0755); *ss='/';}
+        symlink(path, sp);
     }
 }
 
@@ -266,6 +289,11 @@ static void db_write(uevent_t *ue) {
     FILE *f = fopen(path,"w");
     if (!f) return;
     for (int i=0;i<ue->nenv;i++) fprintf(f, "E:%s\n", ue->env[i]);
+    if (ue->ntags) {
+        fprintf(f, "E:TAGS=");
+        for (int t=0;t<ue->ntags;t++) fprintf(f, "%s%s", t?",":"", ue->tags[t]);
+        fprintf(f, "\n");
+    }
     fclose(f);
 }
 static void db_remove(uevent_t *ue) {
