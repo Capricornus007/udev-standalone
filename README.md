@@ -11,7 +11,7 @@ A **clean-room** device manager that merges two worlds. Licensed under
   (the rich rule language: `SUBSYSTEM`/`KERNEL`/`ACTION`/`ENV{}` matching,
   `==`/`!=`/`=`/`+=`/`:=` operators, `MODE`/`OWNER`/`GROUP` actions).
 
-## Status: milestone 0 (skeleton)
+## Status (milestone 5)
 
 - [x] netlink uevent listener (kernel → userspace)
 - [x] rules.d parser + matcher (`SUBSYSTEM`/`KERNEL`/`ACTION`/`ENV{}`)
@@ -22,7 +22,9 @@ A **clean-room** device manager that merges two worlds. Licensed under
 - [x] rules.d directory loading (lexical merge of `*.rules`)
 - [x] `ATTR{}` match, `SYMLINK` create, `TAG` record (udev_enumerate ready)
 - [x] **unified `udev` binary** — daemon + admin tool (`trigger`/`settle`/`info`/`control`) in one
-- [x] live reload on `SIGHUP` (+ `/run/udev.pid`)
+- [x] live reload on `SIGHUP` (+ standard `/run/udev.pid`)
+- [x] **`udev monitor`** subcommand — netlink listener for kernel uevents (grp1) and daemon replay (grp4), mirrors `udevadm monitor`
+- [x] standard udev runtime paths (`/run/udev/data`, `/run/udev.pid`) for drop-in universality
 - [x] pending-event counter (seed of the `udev_queue_*` state machine)
 - [ ] `IMPORT`/`GOTO`/`LABEL`/`RUN`/`PROGRAM`
 - [ ] hwdb lookups, builtins (net_id / path_id / blkid)

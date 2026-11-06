@@ -14,6 +14,11 @@
 #include <grp.h>
 #include <dirent.h>
 
+/* pidfile: conventional udev location. On the target systemd-free system there
+   is nothing else to collide with, and keeping the standard path maximizes
+   drop-in compatibility with scripts/tools that expect udev's runtime layout. */
+#define UDEV_PIDFILE "/run/udev.pid"
+
 /* ===================== uevent ===================== */
 #define UE_MAX_ENV 96
 #define UE_ENV_LEN 160
@@ -349,23 +354,59 @@ static void cmd_info(const char *dbkey) {
 }
 static void cmd_control(const char *action) {
     if (!strcmp(action,"reload")) {
-        FILE *p=fopen("/run/udev.pid","r");
+        FILE *p=fopen(UDEV_PIDFILE,"r");
         if(p){ int pid; fscanf(p,"%d",&pid); fclose(p); kill(pid,SIGHUP); printf("sent SIGHUP to %d\n",pid); }
-        else printf("no daemon pidfile (/run/udev.pid)\n");
+        else printf("no daemon pidfile (%s)\n", UDEV_PIDFILE);
     } else printf("unknown control action: %s\n",action);
+}
+
+/* passive monitor: listen on the kernel uevent multicast groups and print
+   each event as it arrives (mirrors `udevadm monitor`). kernel=grp1,
+   udev=grp4 (our daemon's rebroadcast). default: both. */
+static void cmd_monitor(int kernel, int udev) {
+    int groups = (kernel?1:0) | (udev?4:0);
+    if (groups == 0) groups = 1 | 4; /* default: kernel + udev replay */
+    int fd = socket(AF_NETLINK, SOCK_RAW, NETLINK_KOBJECT_UEVENT);
+    if (fd < 0) { perror("monitor socket"); return; }
+    struct sockaddr_nl nl; memset(&nl,0,sizeof nl);
+    nl.nl_family = AF_NETLINK;
+    nl.nl_groups = groups;
+    if (bind(fd,(struct sockaddr*)&nl,sizeof nl) < 0) { perror("monitor bind"); close(fd); return; }
+    char buf[8192];
+    printf("[udev] monitor listening (kernel=%s udev=%s)\n",
+           kernel?"yes":"no", udev?"yes":"no");
+    fflush(stdout);
+    for (;;) {
+        ssize_t n = recv(fd, buf, sizeof buf - 1, 0);
+        if (n <= 0) continue;
+        const char *p = buf, *end = buf + n;
+        const char *hdr = p;
+        const char *nl0 = memchr(p, '\0', end - p);
+        printf("=== %s ===\n", hdr);
+        if (nl0) p = nl0 + 1;
+        while (p < end && *p) {
+            const char *nnl = memchr(p, '\0', end - p);
+            if (!nnl) break;
+            printf("  %.*s\n", (int)(nnl - p), p);
+            p = nnl + 1;
+        }
+        fflush(stdout);
+    }
 }
 
 /* ===================== main ===================== */
 int main(int argc, char **argv) {
     const char *cmd = (argc>1 && argv[1][0]!='-') ? argv[1] : "daemon";
     int test=0; const char *testfile=NULL, *subsys=NULL, *dbkey=NULL, *ctlact="reload";
-    int timeout=120;
+    int timeout=120, kernel=0, udev=0;
     for (int i = (strcmp(cmd,"daemon")==0)?1:2; i<argc; i++) {
         if(!strcmp(argv[i],"--test")){ test=1; if(i+1<argc) testfile=argv[++i]; }
         else if(!strcmp(argv[i],"--rules")){ if(i+1<argc) g_rulesdir=argv[++i]; }
         else if(!strcmp(argv[i],"--subsystem")){ if(i+1<argc) subsys=argv[++i]; }
         else if(!strcmp(argv[i],"--timeout")){ if(i+1<argc) timeout=atoi(argv[++i]); }
         else if(!strcmp(argv[i],"--db")){ if(i+1<argc) dbkey=argv[++i]; }
+        else if(!strcmp(argv[i],"--kernel")||!strcmp(argv[i],"-k")) kernel=1;
+        else if(!strcmp(argv[i],"--udev")||!strcmp(argv[i],"-u")) udev=1;
         else if(!strcmp(argv[i],"--action")){ /* reserved */ }
     }
     g_test = test;
@@ -403,7 +444,7 @@ int main(int argc, char **argv) {
         int fd = netlink_setup();
         if (fd<0){ perror("netlink setup (need root/CAP_NET_ADMIN)"); return 1; }
         if (monitor_setup() < 0) fprintf(stderr, "warning: monitor rebroadcast unavailable\n");
-        if (geteuid()==0){ FILE *pf=fopen("/run/udev.pid","w"); if(pf){ fprintf(pf,"%d",getpid()); fclose(pf); } }
+        if (geteuid()==0){ FILE *pf=fopen(UDEV_PIDFILE,"w"); if(pf){ fprintf(pf,"%d",getpid()); fclose(pf); } }
         char buf[8192];
         for (;;) {
             ssize_t n = recv(fd,buf,sizeof buf-1,0);
@@ -432,9 +473,12 @@ int main(int argc, char **argv) {
     } else if (!strcmp(cmd,"control")) {
         cmd_control(ctlact);
         return 0;
+    } else if (!strcmp(cmd,"monitor")) {
+        cmd_monitor(kernel, udev);
+        return 0;
     } else {
         fprintf(stderr,"unknown command: %s\n",cmd);
-        fprintf(stderr,"usage: udev [daemon|trigger|settle|info|control] [options]\n");
+        fprintf(stderr,"usage: udev [daemon|trigger|settle|info|control|monitor] [options]\n");
         return 1;
     }
     return 0;
