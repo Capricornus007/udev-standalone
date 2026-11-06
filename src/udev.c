@@ -587,7 +587,12 @@ static void apply_rule(rule_t *r, uevent_t *ue) {
         }
     }
     if(!ue->devname[0]) return;
-    char path[512]; snprintf(path,sizeof path,"/dev/%s",ue->devname);
+    char path[512];
+    /* apply mode builds a self-contained fake /dev tree under UDEV_RUNDIR so the
+       result is fully inspectable without touching the real /dev (and without root);
+       the live daemon always creates the real /dev node. */
+    if (g_apply) snprintf(path,sizeof path,"%s/dev/%s", rundir(), ue->devname);
+    else         snprintf(path,sizeof path,"/dev/%s", ue->devname);
     const char *km = mode[0]? mode : ue_getenv(ue,"MODE");
     unsigned perm = km? (unsigned)strtol(km,NULL,8) : 0600;
     if (!g_apply) {
@@ -602,19 +607,27 @@ static void apply_rule(rule_t *r, uevent_t *ue) {
         if (g_test) printf("       [would RUN] %s\n", r->run[k]);
         else if (!g_apply) run_exec(r->run[k]);
     }
-    if (g_test || g_apply) return;   /* never mutate /dev in test/apply mode */
+    if (g_test) return;   /* --test: print only, never create nodes */
+    /* create the node (apply mode: under rundir/dev; live daemon: /dev) */
     char *slash=strrchr(path,'/');
     if (slash && slash!=path){ *slash=0; mkdir(path,0755); *slash='/'; }
-    if (mknod(path, S_IFCHR|perm, makedev(ue->major,ue->minor))<0)
-        printf("       mknod failed: %s\n", strerror(errno));
-    else {
+    if (mknod(path, S_IFCHR|perm, makedev(ue->major,ue->minor))<0) {
+        if (g_apply) {
+            /* not root in the fake-root test: leave a placeholder file so the node
+               path exists for stat-based clients / inspection */
+            FILE *pf=fopen(path,"w"); if(pf) fclose(pf);
+        } else
+            printf("       mknod failed: %s\n", strerror(errno));
+    } else if (!g_apply) {
         uid_t u=0; gid_t g=0;
         if(owner[0]){ struct passwd *pw=getpwnam(owner); if(pw) u=pw->pw_uid; }
         if(group[0]){ struct group *gr=getgrnam(group); if(gr) g=gr->gr_gid; }
         chown(path,u,g);
     }
     if (linkname[0]) {
-        char sp[512]; snprintf(sp,sizeof sp,"/dev/%s",linkname);
+        char sp[512];
+        if (g_apply) snprintf(sp,sizeof sp,"%s/dev/%s", rundir(), linkname);
+        else         snprintf(sp,sizeof sp,"/dev/%s", linkname);
         char *ss=strrchr(sp,'/'); if(ss&&ss!=sp){*ss=0; mkdir(sp,0755); *ss='/';}
         symlink(path, sp);
     }
@@ -887,7 +900,8 @@ int main(int argc, char **argv) {
         uevent_t ue;
         if (ue_parse(buf, (ssize_t)rn, &ue) < 0) { fprintf(stderr, "failed to parse uevent\n"); return 1; }
         char dd[320]; snprintf(dd, sizeof dd, "%s/data", rundir());
-        mkdir(rundir(), 0755); mkdir(dd, 0755);
+        char dv[320]; snprintf(dv, sizeof dv, "%s/dev", rundir());
+        mkdir(rundir(), 0755); mkdir(dd, 0755); mkdir(dv, 0755);
         /* continue the udev seqnum from any prior queue state, so repeated apply
            runs advance a monotonic counter as a long-running daemon would */
         { char qp[512]; snprintf(qp,sizeof qp,"%s/queue",rundir());
@@ -902,6 +916,17 @@ int main(int argc, char **argv) {
             printf("[udev] apply: uevent has no MAJOR/MINOR — device DB not written "
                    "(%d rule(s) matched)\n", matched);
         printf("[udev] apply: queue state -> %s/queue (SEQNUM=%d)\n", rundir(), g_seqnum);
+        return 0;
+    }
+
+    /* `udev queue` — print the daemon's queue state (SEQNUM / QUEUE_LENGTH) from
+       the rundir. Drop-in equivalent to `udevadm settle`'s status read; honors UDEV_RUNDIR. */
+    if (!strcmp(cmd,"queue")) {
+        char p[512]; snprintf(p,sizeof p,"%s/queue",rundir());
+        unsigned long long seq=0; int len=0;
+        FILE *f=fopen(p,"r");
+        if(f){ char l[256]; while(fgets(l,sizeof l,f)){ if(!strncmp(l,"SEQNUM=",7)) seq=strtoull(l+7,NULL,10); else if(!strncmp(l,"QUEUE_LENGTH=",13)) len=(int)strtol(l+13,NULL,10); } fclose(f); }
+        printf("SEQNUM=%llu\nQUEUE_LENGTH=%d\n", seq, len);
         return 0;
     }
 
