@@ -7,6 +7,7 @@
 #include <errno.h>
 #include <signal.h>
 #include <time.h>
+#include <stdint.h>
 #include <sys/socket.h>
 #include <linux/netlink.h>
 #include <sys/stat.h>
@@ -37,8 +38,11 @@ typedef struct {
     char subsys[64];
     char devname[128];
     int  major, minor;
+    int  ifindex;
     char tags[16][64];
     int  ntags;
+    char devlinks[16][256];
+    int  ndevlinks;
     int  nenv;
     char env[UE_MAX_ENV][UE_ENV_LEN];
 } uevent_t;
@@ -92,6 +96,7 @@ static int ue_parse(const char *buf, ssize_t len, uevent_t *ue) {
     if ((s = ue_getenv(ue,"DEVNAME")))   strncpy(ue->devname, s, sizeof(ue->devname)-1);
     if ((s = ue_getenv(ue,"MAJOR"))) ue->major = atoi(s);
     if ((s = ue_getenv(ue,"MINOR"))) ue->minor = atoi(s);
+    if ((s = ue_getenv(ue,"IFINDEX"))) ue->ifindex = atoi(s);
     return 0;
 }
 
@@ -611,7 +616,8 @@ static void apply_rule(rule_t *r, uevent_t *ue) {
     /* create the node (apply mode: under rundir/dev; live daemon: /dev) */
     char *slash=strrchr(path,'/');
     if (slash && slash!=path){ *slash=0; mkdir(path,0755); *slash='/'; }
-    if (mknod(path, S_IFCHR|perm, makedev(ue->major,ue->minor))<0) {
+    mode_t ntype = !strcmp(ue->subsys,"block") ? S_IFBLK : S_IFCHR;
+    if (mknod(path, ntype|perm, makedev(ue->major,ue->minor))<0) {
         if (g_apply) {
             /* not root in the fake-root test: leave a placeholder file so the node
                path exists for stat-based clients / inspection */
@@ -630,30 +636,64 @@ static void apply_rule(rule_t *r, uevent_t *ue) {
         else         snprintf(sp,sizeof sp,"/dev/%s", linkname);
         char *ss=strrchr(sp,'/'); if(ss&&ss!=sp){*ss=0; mkdir(sp,0755); *ss='/';}
         symlink(path, sp);
+        if (ue->ndevlinks < 16)
+            snprintf(ue->devlinks[ue->ndevlinks++], 256, "%s", linkname);
     }
 }
 
 /* ===================== device DB ===================== */
+/* udev database key: b/c MAJOR:MINOR for device nodes, nIFINDEX for network
+   interfaces, +subsystem:sysname for everything else (matches udev's layout). */
+static int db_key(uevent_t *ue, char *out, size_t n) {
+    if (ue->major || ue->minor) {
+        snprintf(out, n, "%c%d:%d", !strcmp(ue->subsys,"block")?'b':'c', ue->major, ue->minor);
+        return 1;
+    }
+    if (!strcmp(ue->subsys,"net") && ue->ifindex > 0) {
+        snprintf(out, n, "n%d", ue->ifindex);
+        return 1;
+    }
+    if (ue->subsys[0] && ue->devpath[0]) {
+        const char *base = strrchr(ue->devpath,'/');
+        base = base ? base+1 : ue->devpath;
+        if (*base) { snprintf(out, n, "+%.60s:%.60s", ue->subsys, base); return 1; }
+    }
+    return 0;
+}
+static unsigned long long now_usec(void) {
+    struct timespec ts;
+    if (clock_gettime(CLOCK_MONOTONIC,&ts) != 0) return 0;
+    return (unsigned long long)ts.tv_sec*1000000ull + (unsigned long long)ts.tv_nsec/1000ull;
+}
 static void db_write(uevent_t *ue) {
     if (g_test) return;
-    if (ue->major==0 && ue->minor==0) return;
+    char key[128];
+    if (!db_key(ue,key,sizeof key)) return;
     char path[512];
-    snprintf(path, sizeof path, "%s/data/c%d:%d", rundir(), ue->major, ue->minor);
+    snprintf(path, sizeof path, "%s/data/%s", rundir(), key);
+    /* keep the original initialization timestamp across updates */
+    unsigned long long init = now_usec();
+    FILE *old = fopen(path,"r");
+    if (old) { char l[256]; while (fgets(l,sizeof l,old)) {
+        if (l[0]=='I' && l[1]==':') { init = strtoull(l+2,NULL,10); break; } } fclose(old); }
     FILE *f = fopen(path,"w");
     if (!f) return;
-    for (int i=0;i<ue->nenv;i++) fprintf(f, "E:%s\n", ue->env[i]);
-    if (ue->ntags) {
-        fprintf(f, "E:TAGS=");
-        for (int t=0;t<ue->ntags;t++) fprintf(f, "%s%s", t?",":"", ue->tags[t]);
-        fprintf(f, "\n");
+    for (int i=0;i<ue->ndevlinks;i++) {
+        const char *dl = ue->devlinks[i];
+        if (!strncmp(dl,"/dev/",5)) dl += 5;
+        fprintf(f, "S:%s\n", dl);
     }
+    if (init) fprintf(f, "I:%llu\n", init);
+    for (int i=0;i<ue->nenv;i++) fprintf(f, "E:%s\n", ue->env[i]);
+    for (int t=0;t<ue->ntags;t++) fprintf(f, "G:%s\nQ:%s\n", ue->tags[t], ue->tags[t]);
     fclose(f);
 }
 static void db_remove(uevent_t *ue) {
     if (g_test) return;
-    if (ue->major==0 && ue->minor==0) return;
+    char key[128];
+    if (!db_key(ue,key,sizeof key)) return;
     char path[512];
-    snprintf(path, sizeof path, "%s/data/c%d:%d", rundir(), ue->major, ue->minor);
+    snprintf(path, sizeof path, "%s/data/%s", rundir(), key);
     unlink(path);
 }
 
@@ -1014,12 +1054,13 @@ int main(int argc, char **argv) {
           if(qf){ char l[256]; while(fgets(l,sizeof l,qf)){ if(!strncmp(l,"SEQNUM=",7)){ g_seqnum=(int)strtol(l+7,NULL,10); break; } } fclose(qf); } }
         g_test = 0; g_apply = 1;
         int matched = process_uevent(&ue);
-        if (ue.major || ue.minor)
-            printf("[udev] apply: wrote %s/data/c%d:%d (%d rule(s) matched)\n",
-                   rundir(), ue.major, ue.minor, matched);
+        char key[128];
+        if (db_key(&ue,key,sizeof key))
+            printf("[udev] apply: wrote %s/data/%s (%d rule(s) matched)\n",
+                   rundir(), key, matched);
         else
-            printf("[udev] apply: uevent has no MAJOR/MINOR — device DB not written "
-                   "(%d rule(s) matched)\n", matched);
+            printf("[udev] apply: no device-DB key for this uevent (%d rule(s) matched)\n",
+                   matched);
         printf("[udev] apply: queue state -> %s/queue (SEQNUM=%d)\n", rundir(), g_seqnum);
         return 0;
     }
