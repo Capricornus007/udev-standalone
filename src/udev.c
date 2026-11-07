@@ -30,6 +30,7 @@
    end-to-end daemon→libudev test without root or a real kernel netlink. */
 static char g_rundir[256];
 static const char *rundir(void){ return g_rundir[0] ? g_rundir : "/run/udev"; }
+static unsigned long long kernel_uevent_seqnum(void);
 
 /* ===================== uevent ===================== */
 #define UE_MAX_ENV 96
@@ -901,13 +902,37 @@ static int queue_length_from_rundir(void) {
         if(!strncmp(l,"QUEUE_LENGTH=",13)){ len=atoi(l+13); break; } } fclose(f); }
     return len;
 }
+static unsigned long long read_u64_file(const char *path) {
+    FILE *f=fopen(path,"r"); if(!f) return 0;
+    unsigned long long v=0; if(fscanf(f,"%llu",&v)!=1) v=0; fclose(f); return v;
+}
+static unsigned long long kernel_uevent_seqnum(void) {
+    return read_u64_file("/sys/kernel/uevent_seqnum");
+}
+/* Returns QUEUE_LENGTH and (optionally) the daemon's persisted SEQNUM. */
+static int queue_state_from_rundir(unsigned long long *seq_out) {
+    char p[512]; snprintf(p,sizeof p,"%s/queue",rundir());
+    int len=0; unsigned long long seq=0; FILE *f=fopen(p,"r");
+    if(f){ char l[256]; while(fgets(l,sizeof l,f)){
+        if(!strncmp(l,"QUEUE_LENGTH=",13)) len=atoi(l+13);
+        else if(!strncmp(l,"SEQNUM=",7)) seq=strtoull(l+7,NULL,10);
+    } fclose(f); }
+    if(seq_out) *seq_out=seq;
+    return len;
+}
 static int cmd_settle(int timeout) {
     time_t start=time(NULL);
     for(;;){
-        int pending=queue_length_from_rundir();
-        if(pending<=0){ printf("settled\n"); return 0; }
+        unsigned long long seq=0;
+        int pending=queue_state_from_rundir(&seq);
+        unsigned long long kern=kernel_uevent_seqnum();
+        /* seq==0 means no persisted daemon state (test/fake root); do not wait
+           on an unrelated host kernel seqnum in that case. */
+        int caught_up = (seq==0) || (kern<=seq);
+        if(pending<=0 && caught_up){ printf("settled\n"); return 0; }
         if(timeout>0 && time(NULL)-start>=timeout){
-            fprintf(stderr,"settle: timeout (%ds, %d pending)\n",timeout,pending);
+            fprintf(stderr,"settle: timeout (%ds, %d pending, seq=%llu kern=%llu)\n",
+                    timeout,pending,seq,kern);
             return 1;
         }
         usleep(50000);
@@ -1428,6 +1453,10 @@ int main(int argc, char **argv) {
         if (fd<0){ perror("netlink setup (need root/CAP_NET_ADMIN)"); return 1; }
         if (monitor_setup() < 0) fprintf(stderr, "warning: monitor rebroadcast unavailable\n");
         if (geteuid()==0 || getenv("UDEV_PIDFILE")){ FILE *pf=fopen(pidfile_path(),"w"); if(pf){ fprintf(pf,"%d",getpid()); fclose(pf); } }
+        /* Start from the kernel's current seqnum and persist it, so an external
+           `udevadm settle` can tell whether triggered events have been processed. */
+        g_seqnum = (int)kernel_uevent_seqnum();
+        queue_write_state();
         char buf[8192];
         while (!g_stop) {
             ssize_t n = recv(fd,buf,sizeof buf-1,0);
