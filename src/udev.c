@@ -401,6 +401,24 @@ static int glob_match(const char *pat, const char *str) {
             return 0;
         }
         if (*pat=='?') { pat++; str++; continue; }
+        if (*pat=='[') {
+            const char *p=pat+1; int neg=0, matched=0, first=1;
+            if (*p=='!' || *p=='^') { neg=1; p++; }
+            while (*p && (*p!=']' || first)) {
+                first=0;
+                if (p[1]=='-' && p[2] && p[2]!=']') {
+                    if ((unsigned char)*str >= (unsigned char)p[0] &&
+                        (unsigned char)*str <= (unsigned char)p[2]) matched=1;
+                    p+=3;
+                } else {
+                    if (*str==*p) matched=1;
+                    p++;
+                }
+            }
+            if (*p!=']') return 0;       /* malformed class */
+            if (matched==neg) return 0;
+            pat=p+1; str++; continue;
+        }
         if (*pat != *str) return 0;
         pat++; str++;
     }
@@ -1252,9 +1270,9 @@ int main(int argc, char **argv) {
     if (!strcmp(prog,"udevadm")) {
         if (argc>1 && argv[1][0]!='-') { cmd=argv[1]; argi=2; }
         else { fprintf(stderr,"usage: udevadm <command> [options]\n"); return 1; }
-    } else if (!strcmp(prog,"udevd") || !strcmp(prog,"systemd-udevd")) {
+    } else if (!strcmp(prog,"udevd")) {
         cmd="daemon"; argi=1;
-    } else if (!strcmp(prog,"udev-hwdb") || !strcmp(prog,"systemd-hwdb")) {
+    } else if (!strcmp(prog,"udev-hwdb")) {
         cmd="hwdb"; argi=1;
     } else {
         cmd = (argc>1 && argv[1][0]!='-') ? argv[1] : "daemon";
