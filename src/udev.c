@@ -895,13 +895,6 @@ static void trigger_subsystems(const char *action) {
 }
 /* settle must work from a separate admin process, so read the daemon's persisted
    queue state rather than this process's (always-zero) in-memory counter. */
-static int queue_length_from_rundir(void) {
-    char p[512]; snprintf(p,sizeof p,"%s/queue",rundir());
-    int len=0; FILE *f=fopen(p,"r");
-    if(f){ char l[256]; while(fgets(l,sizeof l,f)){
-        if(!strncmp(l,"QUEUE_LENGTH=",13)){ len=atoi(l+13); break; } } fclose(f); }
-    return len;
-}
 static unsigned long long read_u64_file(const char *path) {
     FILE *f=fopen(path,"r"); if(!f) return 0;
     unsigned long long v=0; if(fscanf(f,"%llu",&v)!=1) v=0; fclose(f); return v;
