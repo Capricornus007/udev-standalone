@@ -1006,14 +1006,11 @@ static int pid_is_this_elf(int pid) {
     ssize_t n=readlink(target,buf,sizeof buf);
     ssize_t m=readlink("/proc/self/exe",self,sizeof self);
     if(n>0 && m>0){ buf[n]=0; self[m]=0; return strcmp(self,buf)==0; }
-    /* readlink fails for another user's process without privilege: fall back to
-       the personality names this binary answers to. A foreign implementation
-       (e.g. the host's systemd-udevd) is caught by the comm check below. */
-    char cpath[64], comm[32]="";
-    snprintf(cpath,sizeof cpath,"/proc/%d/comm",pid);
-    FILE *c=fopen(cpath,"r");
-    if(c){ if(fscanf(c,"%31s",comm)!=1) comm[0]=0; fclose(c); }
-    return !strcmp(comm,"udevd") || !strcmp(comm,"udev");
+    /* The target's executable is not readable (typically another user's
+       process). Never fall back to "comm looks like udevd": that is exactly
+       how a root-run control command would kill a foreign udevd during
+       migration. Identity must be proven; otherwise refuse. */
+    return 0;
 }
 static const char *pidfile_path(void) {
     /* Production uses the conventional /run/udev.pid; UDEV_PIDFILE overrides it so
