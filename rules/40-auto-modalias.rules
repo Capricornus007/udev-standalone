@@ -1,0 +1,7 @@
+# Kernel-module autoloading — the duty full-featured udev implementations do
+# internally through libkmod. udev-standalone has no libkmod. run_exec() execs
+# the RUN command with the FULL uevent environment, so the helper reads
+# MODALIAS from its own env and calls kmod's modprobe (the kernel's
+# CONFIG_MODPROBE_PATH="/sbin/modprobe" path). Events without a MODALIAS are a
+# no-op (helper exits 0).
+ACTION=="add", RUN+="/usr/lib/udev/udev-auto-modprobe"

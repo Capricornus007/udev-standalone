@@ -1,0 +1,6 @@
+#!/bin/sh
+# Autoload the module for this device's MODALIAS (invoked via RUN+ from
+# 40-auto-modalias.rules; the uevent env is inherited from the daemon).
+[ -n "${MODALIAS:-}" ] || exit 0
+# Fire-and-forget: an alias nothing provides is not an error for the event.
+/sbin/modprobe -q -- "$MODALIAS" || true
