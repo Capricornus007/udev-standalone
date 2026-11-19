@@ -1,9 +1,0 @@
-# milestone 7 demo hwdb entries (text format, mirrors /lib/udev/hwdb.d/*.hwdb)
-# match line (no indent) + indented KEY=VALUE property lines
-pci:v00008086d00001234*
- ID_VENDOR_FROM_DATABASE=Intel Corporation
- ID_MODEL_FROM_DATABASE=Example Host Bridge
-
-usb:v046DpC52B*
- ID_VENDOR_FROM_DATABASE=Logitech, Inc.
- ID_MODEL_FROM_DATABASE=USB Optical Mouse

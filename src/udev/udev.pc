@@ -1,0 +1,9 @@
+#  SPDX-License-Identifier: LGPL-2.1-or-later
+
+Name: udev
+Description: eudev
+Version: 262
+prefix=/usr
+exec_prefix=${prefix}
+udev_dir=/usr/lib/udev
+udevdir=${udev_dir}

@@ -1,0 +1,35 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
+
+#include <stdlib.h>
+
+#include "factory-reset.h"
+#include "udev.h"
+
+/* Sometimes it is relevant in udev rules to know whether factory reset is currently in effect or not. Report
+ * the current state at moment of probing as a udev property. This can be used to create certain device node
+ * symlinks only once factory reset is complete, or even mark whole devices as SYSTEMD_READY=0 as long as
+ * factory reset is still ongoing. */
+
+static int builtin_factory_reset(struct udev_device *dev, int argc, char *argv[], enum udev_event_mode mode) {
+        FactoryResetMode f;
+
+        /* Like systemd, the errors are returned as negative error codes, with the reason. */
+        if (argc != 2 || !streq(argv[1], "status"))
+                return log_device_warning_errno(dev, EINVAL, "%s: expected: status", argv[0]);
+
+        /* Report factory reset mode at the moment of probing a device. */
+        f = factory_reset_mode();
+        if (f < 0) {
+                log_device_debug_errno(dev, f, "Unable to detect factory reset mode, ignoring: %m");
+                return EXIT_SUCCESS;
+        }
+
+        return udev_builtin_add_property(dev, mode, "ID_FACTORY_RESET", factory_reset_mode_to_string(f));
+}
+
+const struct udev_builtin udev_builtin_factory_reset = {
+        .name = "factory_reset",
+        .cmd = builtin_factory_reset,
+        .help = "Factory Reset Mode",
+        .run_once = true,
+};

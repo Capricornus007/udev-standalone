@@ -1,0 +1,546 @@
+<?xml version='1.0'?>
+<?xml-stylesheet type="text/xsl" href="http://docbook.sourceforge.net/release/xsl/current/xhtml/docbook.xsl"?>
+<!DOCTYPE refentry PUBLIC "-//OASIS//DTD DocBook XML V4.2//EN"
+  "http://www.oasis-open.org/docbook/xml/4.2/docbookx.dtd">
+
+<refentry id="udevd">
+  <refentryinfo>
+    <title>udevd</title>
+    <productname>eudev</productname>
+    <authorgroup>
+      <author>
+        <contrib>Developer</contrib>
+        <firstname>Kay</firstname>
+        <surname>Sievers</surname>
+        <email>kay@vrfy.org</email>
+      </author>
+    </authorgroup>
+  </refentryinfo>
+
+  <refmeta>
+    <refentrytitle>udevd</refentrytitle>
+    <manvolnum>8</manvolnum>
+  </refmeta>
+
+  <refnamediv>
+    <refname>udevd</refname>
+    <refpurpose>Device event managing daemon</refpurpose>
+  </refnamediv>
+
+  <refsynopsisdiv>
+    <para><filename>udevd</filename></para>
+
+    <cmdsynopsis>
+      <command>/sbin/udevd</command>
+      <arg><option>--daemon</option></arg>
+      <arg><option>--debug</option></arg>
+      <arg><option>--ready-notify=</option></arg>
+      <arg><option>--children-max=</option></arg>
+      <arg><option>--exec-delay=</option></arg>
+      <arg><option>--event-timeout=</option></arg>
+      <arg><option>--resolve-names=early|late|never</option></arg>
+      <arg><option>--timeout-signal=</option></arg>
+      <arg><option>--version</option></arg>
+      <arg><option>--help</option></arg>
+    </cmdsynopsis>
+
+  </refsynopsisdiv>
+
+  <refsect1><title>Description</title>
+    <para><command>udevd</command> listens to kernel uevents.
+    For every event, udevd executes matching instructions
+    specified in udev rules. See <citerefentry>
+    <refentrytitle>udev</refentrytitle><manvolnum>7</manvolnum>
+    </citerefentry>.</para>
+
+    <para>The behavior of the daemon can be configured using
+    <citerefentry><refentrytitle>udev.conf</refentrytitle><manvolnum>5</manvolnum></citerefentry>,
+    its command-line options, environment variables, and on the kernel
+    command-line, or changed dynamically with <command>udevadm
+    control</command>.
+    </para>
+
+    <para>On <constant>SIGTERM</constant> or <constant>SIGINT</constant>,
+    or with <command>udevadm control --exit</command>,
+    <command>udevd</command> discards the queued events, tells its workers
+    to exit, and waits up to 30 seconds for the events being processed. A
+    worker that has not finished its event 5 seconds later is killed with
+    <constant>SIGKILL</constant>.</para>
+  </refsect1>
+
+  <refsect1><title>Options</title>
+    <variablelist>
+      <varlistentry>
+        <term><option>-d</option>, <option>--daemon</option></term>
+        <listitem>
+          <para>Detach and run in the background. Unless the log level is
+          <literal>debug</literal>, standard input, output and error are
+          connected to <filename>/dev/null</filename>; then, unlike systemd,
+          which writes them to <filename>/dev/null</filename>, the messages
+          for the console, e.g. with the <constant>console</constant> log
+          target of <varname>$SYSTEMD_LOG_TARGET</varname> or
+          <varname>systemd.log_target=</varname> on the kernel command line,
+          are written to <filename>/dev/console</filename>, or, when that
+          cannot be opened, e.g. in a container, to the kernel log buffer
+          (<filename>/dev/kmsg</filename>).</para>
+        </listitem>
+      </varlistentry>
+
+      <varlistentry>
+        <term><option>-D</option>, <option>--debug</option></term>
+        <listitem>
+          <para>Print debug messages to standard error. The log level
+          set with <varname>udev.log_level=</varname> on the kernel
+          command line takes precedence over it.</para>
+        </listitem>
+      </varlistentry>
+
+      <varlistentry>
+        <term><option>-r</option>, <option>--ready-notify=</option></term>
+        <listitem>
+          <para>Issue (S6/dinit compatible) readiness notification via a
+          file descriptor. A short message followed by a newline character
+          will be sent via the specified file descriptor (inherited from
+          the parent process) when initialization is complete.</para>
+        </listitem>
+      </varlistentry>
+
+      <varlistentry>
+        <term><option>-c</option>, <option>--children-max=</option></term>
+        <listitem>
+          <para>Limit the number of events executed in parallel. When it is
+          not specified or 0, the maximum is determined based on the system
+          resources:
+          <literal>MIN(2 × CPUs + 16, MAX(RAM / 128 MiB, 10), 2048)</literal>,
+          where <literal>CPUs</literal> is the number of CPUs
+          <command>udevd</command> may run on, according to its CPU affinity,
+          and <literal>RAM</literal> the size of the physical memory, or the
+          memory limit of the cgroup of PID 1 when it is smaller:
+          <varname>memory.max</varname> with cgroup v2, or
+          <varname>memory.limit_in_bytes</varname> in the hierarchy of the
+          memory controller with cgroup v1. It takes precedence over
+          <varname>children_max=</varname> in
+          <citerefentry><refentrytitle>udev.conf</refentrytitle><manvolnum>5</manvolnum></citerefentry>,
+          unless it is 0.</para>
+        </listitem>
+      </varlistentry>
+
+      <varlistentry>
+        <term><option>-e</option>, <option>--exec-delay=</option></term>
+        <listitem>
+          <para>Delay the execution of <varname>RUN</varname>
+          instructions by the given number of seconds, or by a time span
+          with a unit, e.g. <literal>500ms</literal>. This option
+          might be useful when debugging system crashes during
+          coldplug caused by loading non-working kernel
+          modules. A delay that is not shorter than the event timeout
+          is ignored. It takes precedence over <varname>exec_delay=</varname> in
+          <citerefentry><refentrytitle>udev.conf</refentrytitle><manvolnum>5</manvolnum></citerefentry>,
+          unless it is 0.</para>
+        </listitem>
+      </varlistentry>
+
+      <varlistentry>
+        <term><option>-t</option>, <option>--event-timeout=</option></term>
+        <listitem>
+          <para>Set the number of seconds to wait for events to finish, or a
+          time span with a unit, e.g. <literal>5min</literal>. After this time
+          the event will be terminated. The default is 180 seconds, which is
+          also used when 0 or less than a millisecond is given. It takes
+          precedence over <varname>event_timeout=</varname> in
+          <citerefentry><refentrytitle>udev.conf</refentrytitle><manvolnum>5</manvolnum></citerefentry>,
+          unless it is 0.</para>
+          <para>When the timeout is reached, the worker processing the event
+          sends the timeout signal (see <option>--timeout-signal=</option>) to
+          the program of <varname>RUN</varname>, <varname>PROGRAM</varname> or
+          <varname>IMPORT{program}</varname> that is still running. If the
+          worker has not finished the event 10 seconds later,
+          <command>udevd</command> sends the timeout signal to the worker.
+          This extra time can be set with the
+          <varname>$UDEV_EXTRA_TIMEOUT_SEC</varname> environment variable of
+          <command>udevd</command>, or
+          <varname>$SYSTEMD_UDEV_EXTRA_TIMEOUT_SEC</varname> when that is not
+          set, to a time span of up to 5 hours, e.g.
+          <literal>30s</literal>.</para>
+        </listitem>
+      </varlistentry>
+
+      <varlistentry>
+        <term><option>--timeout-signal=</option></term>
+        <listitem>
+          <para>Set the signal which <command>udevd</command> will send to
+          forked off processes after reaching event timeout. The setting can be overridden
+          at boot time with the kernel command line option
+          <varname>udev.timeout_signal=</varname>. Setting to <constant>SIGABRT</constant>
+          may be helpful in order to debug worker timeouts. Defaults to
+          <constant>SIGKILL</constant>. Note that setting the option on the command line
+          overrides the setting from the configuration file. The signal is
+          given as a number or a name, with or without the
+          <literal>SIG</literal> prefix. Signals whose default action does not
+          terminate a process, with which the timeout would not stop anything,
+          are ignored with a warning: <constant>SIGCHLD</constant>,
+          <constant>SIGCONT</constant>, <constant>SIGSTOP</constant>,
+          <constant>SIGTSTP</constant>, <constant>SIGTTIN</constant>,
+          <constant>SIGTTOU</constant>, <constant>SIGURG</constant> and
+          <constant>SIGWINCH</constant>. A worker that has not finished its
+          event 5 seconds after the signal, e.g. as it blocks
+          <constant>SIGTERM</constant> while it processes an event, is killed
+          with <constant>SIGKILL</constant>; after a signal whose default action
+          dumps core, e.g. <constant>SIGABRT</constant>, 90 seconds, so that the
+          core dump is not cut off.</para>
+        </listitem>
+      </varlistentry>
+
+      <varlistentry>
+        <term><option>-N</option>, <option>--resolve-names=</option></term>
+        <listitem>
+          <para>Specify when udevd should resolve names of users and groups.
+          When set to <option>early</option> (the default), names will be
+          resolved when the rules are parsed.  When set to
+          <option>late</option>, names will be resolved for every event.
+          When set to <option>never</option>, names will never be resolved,
+          and the <varname>OWNER</varname> and <varname>GROUP</varname> keys
+          whose value is not a numeric ID, i.e. a name or a value with
+          substitutions, will be ignored; the other keys of these rules still
+          apply. It takes precedence over
+          <varname>resolve_names=</varname> in
+          <citerefentry><refentrytitle>udev.conf</refentrytitle><manvolnum>5</manvolnum></citerefentry>.</para>
+        </listitem>
+      </varlistentry>
+
+      <varlistentry>
+        <term><option>-h</option>, <option>--help</option></term>
+        <listitem>
+          <para>Print a short help text and exit.</para>
+        </listitem>
+      </varlistentry>
+
+      <varlistentry>
+        <term><option>-V</option>, <option>--version</option></term>
+        <listitem>
+          <para>Print a short version string and exit.</para>
+        </listitem>
+      </varlistentry>
+    </variablelist>
+  </refsect1>
+
+  <refsect1><title>Kernel command line</title>
+    <variablelist class='kernel-commandline-options'>
+      <para>Parameters starting with "rd." will be read when
+      <command>udevd</command> is used in an initrd, and are ignored
+      otherwise, also by <varname>IMPORT{cmdline}</varname> in the rules. As
+      in systemd, <command>udevd</command> considers itself running in an
+      initrd when <filename>/etc/initrd-release</filename> exists. As initrds
+      that are not made for systemd do not provide
+      <filename>/etc/initrd-release</filename>, unlike systemd it also does so
+      when the root file system is a memory file system (the rootfs of an
+      initramfs, i.e. ramfs or tmpfs), <filename>/init</filename> exists, and
+      one of the files that such initrd generators put into the initrd exists:
+      <filename>/conf/initramfs.conf</filename> (initramfs-tools),
+      <filename>/lib/dracut-lib.sh</filename> (dracut before version 019),
+      <filename>/init_functions</filename> (old versions of mkinitcpio),
+      <filename>/etc/initrd.defaults</filename> (genkernel before version 4.2) or
+      <filename>/.modloop</filename> (mkinitfs of Alpine Linux). The detection
+      can be overridden with the <varname>$SYSTEMD_IN_INITRD</varname>
+      environment variable, set to a boolean value.</para>
+      <para>In the names of the parameters, "-" and "_" are the same, e.g.
+      <varname>udev.children-max=</varname> is the same as
+      <varname>udev.children_max=</varname>. Like systemd, <command>udevd</command> warns
+      about other parameters that start with <varname>udev.</varname>, e.g. misspelled
+      ones, and, in an initrd, with <varname>rd.udev.</varname>, and ignores them.</para>
+      <varlistentry>
+        <term><varname>udev.log_level=</varname></term>
+        <term><varname>rd.udev.log_level=</varname></term>
+        <listitem>
+          <para>Set the log level. <varname>udev.log_priority=</varname> and
+          <varname>rd.udev.log_priority=</varname> are accepted too. It takes precedence over
+          <varname>udev_log=</varname> in
+          <citerefentry><refentrytitle>udev.conf</refentrytitle><manvolnum>5</manvolnum></citerefentry>
+          and over <option>--debug</option>, and
+          <command>udevadm control --log-level=</command> takes
+          precedence over it.</para>
+        </listitem>
+      </varlistentry>
+      <varlistentry>
+        <term><varname>udev.trace[=<replaceable>BOOL</replaceable>]</varname></term>
+        <term><varname>rd.udev.trace[=<replaceable>BOOL</replaceable>]</varname></term>
+        <listitem>
+          <para>Enable/disable trace logging. When enabled, <varname>udev.log_level=</varname> will be
+          ignored, and <literal>debug</literal> level is assumed.</para>
+        </listitem>
+      </varlistentry>
+      <varlistentry>
+        <term><varname>udev.children_max=</varname></term>
+        <term><varname>rd.udev.children_max=</varname></term>
+        <listitem>
+          <para>Limit the number of events executed in parallel. It takes
+          precedence over <option>--children-max=</option>, unless it is
+          0. See <option>--children-max=</option> for the default.</para>
+        </listitem>
+      </varlistentry>
+      <varlistentry>
+        <term><varname>udev.exec_delay=</varname></term>
+        <term><varname>rd.udev.exec_delay=</varname></term>
+        <listitem>
+          <para>Delay the execution of <varname>RUN</varname> instructions by the given
+          number of seconds, or by a time span with a unit, e.g.
+          <literal>500ms</literal>. This option might be useful when
+          debugging system crashes during coldplug caused by loading
+          non-working kernel modules. It takes precedence over
+          <option>--exec-delay=</option>, unless it is 0.</para>
+        </listitem>
+      </varlistentry>
+      <varlistentry>
+        <term><varname>udev.event_timeout=</varname></term>
+        <term><varname>rd.udev.event_timeout=</varname></term>
+        <listitem>
+          <para>Wait for events to finish up to the given number
+          of seconds, or a time span with a unit, e.g.
+          <literal>5min</literal>. This option might be useful if events are
+          terminated due to kernel drivers taking too long to initialize.
+          It takes precedence over <option>--event-timeout=</option>,
+          unless it is 0.</para>
+        </listitem>
+      </varlistentry>
+      <varlistentry>
+        <term><varname>udev.timeout_signal=</varname></term>
+        <term><varname>rd.udev.timeout_signal=</varname></term>
+        <listitem>
+          <para>Specifies a signal that <command>udevd</command> will send to
+          workers on timeout. Note that kernel command line option overrides both the
+          setting in the configuration file and the one on the program command line.
+          As with <option>--timeout-signal=</option>, signals that do not terminate a
+          process are ignored with a warning.</para>
+        </listitem>
+      </varlistentry>
+      <varlistentry>
+        <term><varname>udev.blockdev_read_only[=<replaceable>BOOL</replaceable>]</varname></term>
+        <term><varname>rd.udev.blockdev_read_only[=<replaceable>BOOL</replaceable>]</varname></term>
+        <listitem>
+          <para>If specified, mark all physical block devices read-only as they appear. Synthetic block
+          devices (such as loopback block devices or device mapper devices) are left as they are. This is
+          useful to guarantee that the contents of physical block devices remains unmodified during runtime,
+          for example to implement fully stateless systems, for testing or for recovery situations where
+          corrupted file systems shall not be corrupted further through accidental modification.</para>
+
+          <para>A block device may be marked writable again by issuing the <command>blockdev
+          --setrw</command> command, see <citerefentry
+          project='man-pages'><refentrytitle>blockdev</refentrytitle><manvolnum>8</manvolnum></citerefentry>
+          for details.</para>
+        </listitem>
+      </varlistentry>
+      <varlistentry>
+        <term><varname>net.ifnames=</varname></term>
+        <listitem>
+          <para>Network interfaces are renamed to give them predictable names
+          when possible. It is enabled by default; specifying 0 disables it.
+          When eudev is built with <option>--with-net-ifnames-default=no</option>,
+          it is disabled by default; specifying 1 enables it, and also the
+          alternative names of network interfaces, which are then only assigned
+          with 1. When eudev is built with <option>--enable-rule-generator</option>,
+          the rule generator keeps the names that the kernel gave the interfaces:
+          by default, <filename>80-net-name-slot.rules</filename>, which renames
+          the interfaces, is not installed, as the rule generator replaces it, and
+          this option changes nothing; when eudev is also built with
+          <option>--with-net-ifnames-default=no</option>, specifying 1 enables the
+          renaming, as without the rule generator, except for the interfaces that
+          its rules name already, and the rule generator then records no names (see
+          <citerefentry><refentrytitle>udev</refentrytitle><manvolnum>7</manvolnum></citerefentry>).</para>
+        </listitem>
+      </varlistentry>
+      <varlistentry>
+        <term><varname>net.naming_scheme=</varname></term>
+        <listitem>
+          <para>Selects the naming scheme, i.e. the version of the naming
+          logic of the <command>net_id</command> builtin, that is used to
+          generate the predictable names of network interfaces. It takes the
+          name of a scheme: <literal>eudev</literal> for the names generated by
+          <command>net_id</command> of eudev 3.2.15 and older, one of the schemes of systemd
+          <literal>v238</literal>, <literal>v239</literal>, <literal>v240</literal>,
+          <literal>v241</literal>, <literal>v243</literal>, <literal>v245</literal>,
+          <literal>v247</literal>, <literal>v249</literal>, <literal>v250</literal>,
+          <literal>v251</literal>, <literal>v252</literal>, <literal>v253</literal>,
+          <literal>v254</literal>, <literal>v255</literal>, <literal>v257</literal>,
+          <literal>v258</literal>, <literal>v259</literal>, <literal>v260</literal>
+          and <literal>v261</literal>, or <literal>latest</literal> for the
+          latest one, which is the default. The schemes are described in
+          <citerefentry><refentrytitle>udev</refentrytitle><manvolnum>7</manvolnum></citerefentry>.
+          This option takes precedence over <varname>net_naming_scheme=</varname>
+          in <citerefentry><refentrytitle>udev.conf</refentrytitle><manvolnum>5</manvolnum></citerefentry>.
+          The <varname>$NET_NAMING_SCHEME</varname> environment variable of
+          <command>udevd</command> takes precedence over both, unless its
+          value starts with <literal>:</literal>.</para>
+        </listitem>
+      </varlistentry>
+      <varlistentry>
+        <term><varname>systemd.log_level=</varname></term>
+        <term><varname>systemd.log_target=</varname></term>
+        <term><varname>systemd.log_color[=<replaceable>BOOL</replaceable>]</varname></term>
+        <term><varname>systemd.log_location[=<replaceable>BOOL</replaceable>]</varname></term>
+        <term><varname>systemd.log_time[=<replaceable>BOOL</replaceable>]</varname></term>
+        <term><varname>systemd.log_tid[=<replaceable>BOOL</replaceable>]</varname></term>
+        <term><varname>systemd.log_ratelimit_kmsg[=<replaceable>BOOL</replaceable>]</varname></term>
+        <term><varname>debug</varname></term>
+        <listitem>
+          <para>Like in systemd, the same as the environment variables
+          <varname>$SYSTEMD_LOG_LEVEL</varname>, <varname>$SYSTEMD_LOG_TARGET</varname>,
+          <varname>$SYSTEMD_LOG_COLOR</varname>, <varname>$SYSTEMD_LOG_LOCATION</varname>,
+          <varname>$SYSTEMD_LOG_TIME</varname>, <varname>$SYSTEMD_LOG_TID</varname> and
+          <varname>$SYSTEMD_LOG_RATELIMIT_KMSG</varname>, see below, which take precedence over them.
+          Like in systemd, <varname>debug</varname> without a value is the same as
+          <varname>systemd.log_level=debug</varname>.
+          Like systemd before version 248, every program of eudev that has no controlling terminal reads
+          them: <command>udevd</command>, the programs that it runs, e.g. <command>udevadm</command> or
+          helpers like <command>scsi_id</command>, and the commands run without a terminal, e.g. by init
+          scripts; a command run from a terminal ignores them.</para>
+        </listitem>
+      </varlistentry>
+    </variablelist>
+    <para>The log level of <command>udevd</command> is taken from the following, where a later one takes
+    precedence over the earlier ones: the default, <literal>info</literal>;
+    <varname>systemd.log_level=</varname> or <varname>debug</varname> on the kernel command line;
+    <varname>$UDEV_LOG_LEVEL</varname> or <varname>$SYSTEMD_LOG_LEVEL</varname>;
+    <varname>udev_log=</varname> in
+    <citerefentry><refentrytitle>udev.conf</refentrytitle><manvolnum>5</manvolnum></citerefentry>;
+    <option>--debug</option>; <varname>udev.log_level=</varname> on the kernel command line; and
+    <command>udevadm control --log-level=</command>. Trace logging, with
+    <varname>udev.trace</varname> or <command>udevadm control --trace</command>, logs at the debug level
+    regardless of them.</para>
+    <!-- when adding entries here, consider also adding them
+         in kernel-command-line.xml -->
+
+    <para>For testing, the kernel command line can be replaced by the value of the
+    <varname>$UDEV_PROC_CMDLINE</varname> environment variable of
+    <command>udevd</command> and <command>udevadm</command>, when it is set, even to
+    an empty string. It applies to the options described here, to the
+    <varname>net.ifnames=</varname> option used by
+    <filename>80-net-name-slot.rules</filename> (and by
+    <filename>80-net-altnames.rules</filename> when eudev is built with
+    <option>--with-net-ifnames-default=no</option>, and by
+    <filename>75-persistent-net-generator.rules</filename> when it is also built
+    with <option>--enable-rule-generator</option>), and to
+    <varname>IMPORT{cmdline}</varname> in the rules in general, and it is handled like
+    the kernel command line, e.g. options starting with "rd." are ignored outside of an
+    initrd:</para>
+    <programlisting>UDEV_PROC_CMDLINE="net.naming_scheme=v250" udevadm test-builtin net_id /sys/class/net/eth0
+UDEV_PROC_CMDLINE="net.ifnames=0" udevadm test /sys/class/net/eth0
+UDEV_PROC_CMDLINE="net.ifnames=1" udevadm test /sys/class/net/eth0</programlisting>
+    <para>The last two commands show what the rules do with the interface when
+    the renaming is disabled and when it is enabled, independent of the default
+    of <varname>net.ifnames=</varname> that eudev is built with. They do not run
+    <command>write_net_rules</command>, the program of the rule generator, so they
+    do not show a name that it would give.</para>
+    <para>For compatibility with systemd, <varname>$SYSTEMD_PROC_CMDLINE</varname>
+    is used the same way when <varname>$UDEV_PROC_CMDLINE</varname> is not set.</para>
+ </refsect1>
+
+  <refsect1>
+    <title>Environment</title>
+
+    <para>Each of the following settings is read from <varname>$UDEV_LOG_<replaceable>NAME</replaceable></varname>,
+    e.g. <varname>$UDEV_LOG_LEVEL</varname>, and, like in systemd, from
+    <varname>$SYSTEMD_LOG_<replaceable>NAME</replaceable></varname>, e.g.
+    <varname>$SYSTEMD_LOG_LEVEL</varname>, when the former is not set. <command>udevadm</command> reads them too, see
+    <citerefentry><refentrytitle>udevadm</refentrytitle><manvolnum>8</manvolnum></citerefentry>.</para>
+
+    <variablelist class='environment-variables'>
+      <varlistentry>
+        <term><varname>$UDEV_LOG_LEVEL</varname></term>
+        <term><varname>$SYSTEMD_LOG_LEVEL</varname></term>
+        <listitem>
+          <para>The maximum log level of emitted messages (messages with a higher log level, i.e. less
+          important ones, are suppressed). Takes a comma-separated list of values. A value may be either
+          one of (in order of decreasing importance) <constant>emerg</constant>,
+          <constant>alert</constant>, <constant>crit</constant>, <constant>err</constant>,
+          <constant>warning</constant>, <constant>notice</constant>, <constant>info</constant>,
+          <constant>debug</constant>, or an integer in the range 0…7, also with a <literal>0x</literal>,
+          <literal>0o</literal> or <literal>0b</literal> prefix. See
+          <citerefentry project='man-pages'><refentrytitle>syslog</refentrytitle><manvolnum>3</manvolnum></citerefentry>
+          for more information. Each value may optionally be prefixed with one of
+          <constant>console</constant>, <constant>syslog</constant> or <constant>kmsg</constant> followed by
+          a colon to set the maximum log level for that specific log target (e.g.
+          <constant>SYSTEMD_LOG_LEVEL=debug,console:info</constant> specifies to log at debug level except
+          when logging to the console which should be at info level). Note that the global maximum log level
+          takes priority over any per target maximum log levels.
+          Like in systemd, it takes precedence over <varname>systemd.log_level=</varname> on the kernel
+          command line, and <varname>udev_log=</varname> of
+          <citerefentry><refentrytitle>udev.conf</refentrytitle><manvolnum>5</manvolnum></citerefentry>,
+          <option>--debug</option>, <varname>udev.log_level=</varname> on the kernel command line and
+          <command>udevadm control --log-level=</command> take precedence over it.</para>
+        </listitem>
+      </varlistentry>
+      <varlistentry>
+        <term><varname>$UDEV_LOG_TARGET</varname></term>
+        <term><varname>$SYSTEMD_LOG_TARGET</varname></term>
+        <listitem>
+          <para>The destination for log messages. One of <constant>console</constant> (log to the attached
+          tty), <constant>console-prefixed</constant> (log to the attached tty but with prefixes encoding the
+          log level and "facility", see
+          <citerefentry project='man-pages'><refentrytitle>syslog</refentrytitle><manvolnum>3</manvolnum></citerefentry>),
+          <constant>kmsg</constant> (log to the kernel circular log buffer), <constant>syslog</constant>
+          (log to <filename>/dev/log</filename>), <constant>syslog-or-kmsg</constant> (log to
+          <filename>/dev/log</filename> if available, and to kmsg otherwise), <constant>auto</constant>
+          (log to kmsg if it can be written, and to the attached tty otherwise),
+          <constant>safe</constant> (log to kmsg if standard error is not a tty, and to the attached tty
+          otherwise), <constant>null</constant> (disable log output).
+          The default is <constant>auto</constant>; <option>--debug</option> logs to the console.</para>
+        </listitem>
+      </varlistentry>
+      <varlistentry>
+        <term><varname>$UDEV_LOG_COLOR</varname></term>
+        <term><varname>$SYSTEMD_LOG_COLOR</varname></term>
+        <listitem>
+          <para>A boolean. If true, messages written to the tty are colored according to their log level,
+          like in systemd: errors and more important ones in red, warnings in yellow, notices highlighted
+          and debug messages in grey. The default is true. Colors are used only when standard output and
+          standard error are terminals, and <varname>$TERM</varname> is set and not <literal>dumb</literal>, and <varname>$NO_COLOR</varname> and <varname>$SYSTEMD_COLORS</varname> are used like by <command>udevadm</command>, see
+          <citerefentry><refentrytitle>udevadm</refentrytitle><manvolnum>8</manvolnum></citerefentry>.</para>
+        </listitem>
+      </varlistentry>
+      <varlistentry>
+        <term><varname>$UDEV_LOG_LOCATION</varname></term>
+        <term><varname>$SYSTEMD_LOG_LOCATION</varname></term>
+        <listitem>
+          <para>A boolean. If true, messages written to the tty are prefixed with a filename and line
+          number in the source code where the message originates. The filename is relative to the top of
+          the source tree, e.g. <filename>src/udev/udevd.c</filename>, like in systemd.</para>
+        </listitem>
+      </varlistentry>
+      <varlistentry>
+        <term><varname>$UDEV_LOG_TIME</varname></term>
+        <term><varname>$SYSTEMD_LOG_TIME</varname></term>
+        <listitem>
+          <para>A boolean. If true, messages written to the tty are prefixed with the local time, e.g.
+          <literal>Mon 2026-10-05 12:34:56 EEST</literal>, like in systemd.</para>
+        </listitem>
+      </varlistentry>
+      <varlistentry>
+        <term><varname>$UDEV_LOG_TID</varname></term>
+        <term><varname>$SYSTEMD_LOG_TID</varname></term>
+        <listitem>
+          <para>A boolean. If true, messages written to the tty are prefixed with the numerical thread ID
+          (TID) in parentheses, like in systemd.</para>
+        </listitem>
+      </varlistentry>
+      <varlistentry>
+        <term><varname>$UDEV_LOG_RATELIMIT_KMSG</varname></term>
+        <term><varname>$SYSTEMD_LOG_RATELIMIT_KMSG</varname></term>
+        <listitem>
+          <para>A boolean, true by default. If true, like in systemd, at most 200 messages in 5 seconds
+          are written to the kernel log buffer by each process; the first message that is dropped is
+          replaced by <literal>Too many messages being logged to kmsg, ignoring</literal>. If false, the
+          messages written to kmsg are not rate limited.</para>
+        </listitem>
+      </varlistentry>
+    </variablelist>
+  </refsect1>
+
+  <refsect1>
+    <title>See Also</title>
+    <para>
+      <citerefentry><refentrytitle>udev.conf</refentrytitle><manvolnum>5</manvolnum></citerefentry>,
+      <citerefentry><refentrytitle>udev</refentrytitle><manvolnum>7</manvolnum></citerefentry>,
+      <citerefentry><refentrytitle>udevadm</refentrytitle><manvolnum>8</manvolnum></citerefentry>
+    </para>
+  </refsect1>
+</refentry>

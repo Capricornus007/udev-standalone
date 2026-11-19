@@ -1,0 +1,1805 @@
+'\" t
+.TH "UDEVADM" "8" "" "eudev" "udevadm"
+.\" -----------------------------------------------------------------
+.\" * Define some portability stuff
+.\" -----------------------------------------------------------------
+.\" ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+.\" http://bugs.debian.org/507673
+.\" http://lists.gnu.org/archive/html/groff/2009-02/msg00013.html
+.\" ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+.ie \n(.g .ds Aq \(aq
+.el       .ds Aq '
+.\" -----------------------------------------------------------------
+.\" * set default formatting
+.\" -----------------------------------------------------------------
+.\" disable hyphenation
+.nh
+.\" disable justification (adjust text to left margin only)
+.ad l
+.\" -----------------------------------------------------------------
+.\" * MAIN CONTENT STARTS HERE *
+.\" -----------------------------------------------------------------
+.SH "NAME"
+udevadm \- udev management tool
+.SH "SYNOPSIS"
+.HP \w'\fBudevadm\fR\ 'u
+\fBudevadm\fR [\fB\-\-debug\fR] [\fB\-\-version\fR] [\fB\-\-help\fR]
+.HP \w'\fBudevadm\ info\ \fR\fB\fIoptions\fR\fR\ 'u
+\fBudevadm info \fR\fB\fIoptions\fR\fR
+.HP \w'\fBudevadm\ trigger\ \fR\fB[options]\fR\ 'u
+\fBudevadm trigger \fR\fB[options]\fR
+.HP \w'\fBudevadm\ settle\ \fR\fB[options]\fR\ 'u
+\fBudevadm settle \fR\fB[options]\fR
+.HP \w'\fBudevadm\ control\ \fR\fB\fIcommand\fR\fR\ 'u
+\fBudevadm control \fR\fB\fIcommand\fR\fR
+.HP \w'\fBudevadm\ monitor\ \fR\fB[options]\fR\ 'u
+\fBudevadm monitor \fR\fB[options]\fR
+.HP \w'\fBudevadm\ hwdb\ \fR\fB[options]\fR\ 'u
+\fBudevadm hwdb \fR\fB[options]\fR
+.HP \w'\fBudevadm\ test\ \fR\fB[options]\fR\fB\ \fR\fB\fIdevpath\fR\fR\fB|\fR\fB\fIfile\fR\fR\fB|\fR\fB\fIid\fR\fR\ 'u
+\fBudevadm test \fR\fB[options]\fR\fB \fR\fB\fIdevpath\fR\fR\fB|\fR\fB\fIfile\fR\fR\fB|\fR\fB\fIid\fR\fR
+.HP \w'\fBudevadm\ test\-builtin\ \fR\fB[options]\fR\fB\ \fR\fB\fIcommand\fR\fR\fB\ \fR\fB\fIdevpath\fR\fR\fB|\fR\fB\fIfile\fR\fR\fB|\fR\fB\fIid\fR\fR\ 'u
+\fBudevadm test\-builtin \fR\fB[options]\fR\fB \fR\fB\fIcommand\fR\fR\fB \fR\fB\fIdevpath\fR\fR\fB|\fR\fB\fIfile\fR\fR\fB|\fR\fB\fIid\fR\fR
+.HP \w'\fBudevadm\ verify\ \fR\fB[options]\fR\fB\ \fR\fB[\fIfile\fR\&.\&.\&.]\fR\&\ 'u
+\fBudevadm verify \fR\fB[options]\fR\fB \fR\fB[\fIfile\fR\&.\&.\&.]\fR\&
+.HP \w'\fBudevadm\ cat\ \fR\fB[options]\fR\fB\ \fR\fB[\fIfile\fR\&.\&.\&.]\fR\&\ 'u
+\fBudevadm cat \fR\fB[options]\fR\fB \fR\fB[\fIfile\fR\&.\&.\&.]\fR\&
+.HP \w'\fBudevadm\ wait\ \fR\fB[options]\fR\fB\ \fR\fB\fIdevice|syspath\fR\fR\fB\&.\&.\&.\fR\&\ 'u
+\fBudevadm wait \fR\fB[options]\fR\fB \fR\fB\fIdevice|syspath\fR\fR\fB\&.\&.\&.\fR\&
+.HP \w'\fBudevadm\ lock\ \fR\fB[options]\fR\fB\ \fR\fB\fIcommand\fR\fR\fB\&.\&.\&.\fR\&\ 'u
+\fBudevadm lock \fR\fB[options]\fR\fB \fR\fB\fIcommand\fR\fR\fB\&.\&.\&.\fR\&
+.SH "DESCRIPTION"
+\fBudevadm\fR
+expects a command and command specific options\&. It controls the runtime behavior of
+\fBudev\fR, requests kernel events, manages the event queue, and provides simple debugging mechanisms\&.
+.SH "OPTIONS"
+
+\fB\-d\fR, \fB\-\-debug\fR
+.RS 4
+Print debug messages to standard error\&. This option is implied in
+\fBudevadm test\fR
+and
+\fBudevadm test\-builtin\fR
+commands\&.
+.RE
+.PP
+\fB\-V\fR, \fB\-\-version\fR
+.RS 4
+Print version number\&.
+.RE
+.PP
+\fB\-h\fR, \fB\-\-help\fR
+.RS 4
+Print help text\&.
+.RE
+.SS "udevadm info [\fIoptions\fR] [\fIdevpath\fR|\fIfile\fR|\fIid\fR...]"
+Queries the udev database for device information stored in the udev database\&. It can also query the properties of a device from its sysfs representation to help creating udev rules that match this device\&.
+.PP
+\fB\-q\fR, \fB\-\-query=\fR\fB\fITYPE\fR\fR
+.RS 4
+Query the database for the specified type of device data\&. It needs the
+\fB\-\-path\fR
+or
+\fB\-\-name\fR
+to identify the specified device\&. Valid
+\fITYPE\fRs are:
+\fBname\fR,
+\fBsymlink\fR,
+\fBpath\fR,
+\fBproperty\fR,
+\fBall\fR\&.
+.RE
+.PP
+\fB\-\-property=\fR\fB\fINAME\fR\fR
+.RS 4
+When showing device properties using the
+\fB\-\-query=property\fR
+option, limit display to properties specified in the argument\&. The argument should be a comma\-separated list of property names\&. If not specified, all known properties are shown\&.
+.RE
+.PP
+\fB\-\-value\fR
+.RS 4
+When showing device properties using the
+\fB\-\-query=property\fR
+option, print only their values, and skip the property name and
+=\&.
+.sp
+When showing device symlinks using the
+\fB\-\-query=symlink\fR
+option, print one path per line instead of separating paths with spaces\&. An empty line is printed after each device, including the last one\&.
+.sp
+Cannot be used together with
+\fB\-x/\-\-export\fR
+or
+\fB\-P/\-\-export\-prefix\fR\&.
+.RE
+.PP
+\fB\-p\fR, \fB\-\-path=\fR\fB\fIDEVPATH\fR\fR
+.RS 4
+The
+/sys/
+path of the device to query, e\&.g\&.\&
+[/sys/]/class/block/sda\&. This option is an alternative to the positional argument with a
+/sys/
+prefix\&.
+\fBudevadm info \-\-path=/class/block/sda\fR
+is equivalent to
+\fBudevadm info /sys/class/block/sda\fR\&.
+.RE
+.PP
+\fB\-n\fR, \fB\-\-name=\fR\fB\fIFILE\fR\fR
+.RS 4
+The name of the device node or a symlink to query, e\&.g\&.\&
+[/dev/]/sda\&. This option is an alternative to the positional argument with a
+/dev/
+prefix\&.
+\fBudevadm info \-\-name=sda\fR
+is equivalent to
+\fBudevadm info /dev/sda\fR\&.
+.RE
+.PP
+\fB\-r\fR, \fB\-\-root\fR
+.RS 4
+Print absolute paths in
+\fBname\fR
+or
+\fBsymlink\fR
+query\&.
+.RE
+.PP
+\fB\-a\fR, \fB\-\-attribute\-walk\fR
+.RS 4
+Print all sysfs properties of the specified device that can be used in udev rules to match the specified device\&. It prints all devices along the chain, up to the root of sysfs that can be used in udev rules\&.
+.sp
+This switch supports JSON output mode (see
+\fB\-\-json=\fR
+below)\&. Note that because this switch generates multiple JSON objects, JSON\-SEQ mode is automatically enabled (RFC7464)\&. (Note: tools such as
+\m[blue]\fBjq\fR\m[]\&\s-2\u[1]\d\s+2
+natively support JSON\-SEQ via the
+\fB\-\-seq\fR
+switch\&.)
+.RE
+.PP
+\fB\-t\fR, \fB\-\-tree\fR
+.RS 4
+Display a sysfs tree\&. This recursively iterates through the sysfs hierarchy and displays it in a tree structure\&. If a path is specified only the subtree below and its parent directories are shown\&. This will show both device and subsystem items\&.
+.RE
+.PP
+\fB\-x\fR, \fB\-\-export\fR
+.RS 4
+Print output as key/value pairs\&. Values are enclosed in single quotes\&.
+.RE
+.PP
+\fB\-P\fR, \fB\-\-export\-prefix=\fR\fB\fINAME\fR\fR
+.RS 4
+Add a prefix to the key name of exported values\&. This implies
+\fB\-\-export\fR\&.
+.RE
+.PP
+\fB\-d\fR, \fB\-\-device\-id\-of\-file=\fR\fB\fIFILE\fR\fR
+.RS 4
+Print major/minor numbers of the underlying device, where the file lives on\&.
+.RE
+.PP
+\fB\-e\fR, \fB\-\-export\-db\fR
+.RS 4
+Export the content of the udev database\&.
+.RE
+.PP
+\fB\-c\fR, \fB\-\-cleanup\-db\fR
+.RS 4
+Cleanup the udev database\&.
+.RE
+.PP
+\fB\-w\fR\fB[SECS]\fR, \fB\-\-wait\-for\-initialization\fR\fB[=SECS]\fR
+.RS 4
+Wait for device to be initialized\&. If argument
+\fISECS\fR
+is not specified, the default is to wait forever\&. With
+0, it does not wait at all, as without this option, like in systemd\&.
+.RE
+.PP
+\fB\-\-subsystem\-match=\fR\fB\fISUBSYSTEM\fR\fR, \fB\-\-subsystem\-nomatch=\fR\fB\fISUBSYSTEM\fR\fR
+.RS 4
+When used with
+\fB\-\-export\-db\fR, only show devices of or not of the given subsystem respectively\&.
+.RE
+.PP
+\fB\-\-attr\-match=\fR\fB\fIFILE\fR\fR\fB[=\fIVALUE\fR]\fR, \fB\-\-attr\-nomatch=\fR\fB\fIFILE\fR\fR\fB[=\fIVALUE\fR]\fR
+.RS 4
+When used with
+\fB\-\-export\-db\fR, only show devices matching or not matching the given attribute respectively\&. The attribute may be a path relative to the device, e\&.g\&.\&
+queue/rotational
+or
+\&.\&./size, unlike in systemd\&.
+.RE
+.PP
+\fB\-\-property\-match=\fR\fB\fIKEY\fR\fR\fB=\fR\fB\fIVALUE\fR\fR
+.RS 4
+When used with
+\fB\-\-export\-db\fR, only show devices matching the given property and value\&.
+.RE
+.PP
+\fB\-\-tag\-match=\fR\fB\fITAG\fR\fR
+.RS 4
+When used with
+\fB\-\-export\-db\fR, only show devices with the given tag\&. When this option is specified more than once, devices that have any of the given tags are shown\&.
+.RE
+.PP
+\fB\-\-sysname\-match=\fR\fB\fINAME\fR\fR
+.RS 4
+When used with
+\fB\-\-export\-db\fR, only show devices with the given
+/sys
+path\&.
+.RE
+.PP
+\fB\-\-name\-match=\fR\fB\fINAME\fR\fR
+.RS 4
+When used with
+\fB\-\-export\-db\fR, only show devices with the given name in
+/dev\&.
+.RE
+.PP
+\fB\-\-parent\-match=\fR\fB\fINAME\fR\fR
+.RS 4
+When used with
+\fB\-\-export\-db\fR, only show devices with the given parent device\&.
+.RE
+.PP
+\fB\-\-initialized\-match\fR, \fB\-\-initialized\-nomatch\fR
+.RS 4
+When used with
+\fB\-\-export\-db\fR, only show devices that are initialized or not initialized respectively\&.
+.RE
+.PP
+\fB\-\-json=\fR\fB\fIMODE\fR\fR
+.RS 4
+Shows output formatted as JSON\&. Expects one of
+short
+(for the shortest possible output without any redundant whitespace or line breaks),
+pretty
+(for a pretty version of the same, with indentation and line breaks) or
+off
+(to turn off JSON output, the default)\&.
+.RE
+.PP
+\fB\-V\fR, \fB\-\-version\fR
+.RS 4
+Print version\&.
+.RE
+.PP
+\fB\-h\fR, \fB\-\-help\fR
+.RS 4
+Print help text\&.
+.RE
+.PP
+\fB\-\-no\-pager\fR
+.RS 4
+Do not pipe output into a pager\&.
+.RE
+.PP
+In addition optional positional arguments can be used to specify one or more devices\&. Each one may be a device node, e\&.g\&.\&
+/dev/sda, a sys path, e\&.g\&.\&
+/sys/class/block/sda, or a symlink to either, also relative to the current directory, or a device ID, as shown in the
+J:
+field of the output (such as
+n1,
+c5:1,
+b259:1, or
++net:lo)\&. The devices given with
+\fB\-\-name=\fR
+and
+\fB\-\-path=\fR
+are shown first\&. Only one device may be specified with
+\fB\-\-attribute\-walk\fR
+and
+\fB\-\-tree\fR\&.
+.PP
+The generated output shows the current device database entry in a terse format\&. Each line shown is prefixed with one of the following characters:
+.sp
+.if d an-trap .it 1 an-trap
+.nr an-no-space-flag 1
+.nr an-break-flag 1
+.B Table\ \&1.\ \&udevadm info output prefixes
+.TS
+allbox tab(:);
+lB lB.
+T{
+Prefix
+T}:T{
+Meaning
+T}
+.T&
+l l
+l l
+l l
+l l
+l l
+l l
+l l
+l l
+l l
+l l
+l l
+l l
+l l
+l l
+l l.
+T{
+P:
+T}:T{
+Device path in /sys/
+T}
+T{
+M:
+T}:T{
+Device name in /sys/ (i\&.e\&. the last component of P:)
+T}
+T{
+R:
+T}:T{
+Device number in /sys/ (i\&.e\&. the numeric suffix of the last component of P:)
+T}
+T{
+J:
+T}:T{
+Device ID
+T}
+T{
+U:
+T}:T{
+Kernel subsystem
+T}
+T{
+B:
+T}:T{
+Driver subsystem
+T}
+T{
+T:
+T}:T{
+Kernel device type within subsystem
+T}
+T{
+D:
+T}:T{
+Kernel device node major/minor
+T}
+T{
+I:
+T}:T{
+Network interface index
+T}
+T{
+N:
+T}:T{
+Kernel device node name
+T}
+T{
+L:
+T}:T{
+Device node symlink priority
+T}
+T{
+S:
+T}:T{
+Device node symlink
+T}
+T{
+Q:
+T}:T{
+Block device sequence number (DISKSEQ)
+T}
+T{
+V:
+T}:T{
+Attached driver
+T}
+T{
+E:
+T}:T{
+Device property
+T}
+.TE
+.sp 1
+.SS "udevadm trigger [\fIoptions\fR] [\fIdevpath\fR|\fIfile\fR|\fIid\fR...]"
+Request device events from the kernel\&. Primarily used to replay events at system coldplug time\&.
+.PP
+Each event is triggered with a random UUID, which the kernel passes on in the
+SYNTH_UUID=
+property (see
+\fB\-\-uuid\fR), and with information about the program that triggered it, which the kernel passes on in these properties (note the mixed\-case names):
+.PP
+SYNTH_ARG_PID=
+.RS 4
+The process ID of
+\fBudevadm\fR\&.
+.RE
+.PP
+SYNTH_ARG_Comm=
+.RS 4
+The name of the program,
+udevadm, without its directory and without the characters that are neither letters nor digits\&.
+.RE
+.PP
+SYNTH_ARG_TimestampRealtime=, SYNTH_ARG_TimestampMonotonic=, SYNTH_ARG_TimestampBoottime=
+.RS 4
+The time in microseconds of
+\fBCLOCK_REALTIME\fR,
+\fBCLOCK_MONOTONIC\fR
+and
+\fBCLOCK_BOOTTIME\fR
+when the triggering started\&. It is taken once, so all events of one call carry the same time\&.
+.RE
+.PP
+The events that
+\fBudevd\fR
+triggers itself, the change events of watched devices (see the
+\fBwatch\fR
+option in
+\fBudev\fR(7)) and of the partitions of a disk whose partition table is read again, carry them too, with the process ID of
+\fBudevd\fR
+(of the worker for the change events of the
+\fBpath_id\fR
+built\-in command) and the time of each event\&. Like with
+\fBsystemd\-udevd\fR, this includes the events that the child process
+(udev\-synth)
+of
+\fBudevd\fR
+triggers when it reads the partition table of a disk again: they carry the process ID and the name of
+\fBudevd\fR, not its own\&. The properties can be matched with
+\fIENV{}\fR
+in rules, are shown by
+\fBudevadm monitor \-\-property\fR
+and in the debug log of
+\fBudevd\fR, and are not stored in the udev database\&. Unlike systemd, eudev does not send
+SYNTH_ARG_PIDFDID=
+and
+SYNTH_ARG_InvocationID=\&. This requires Linux 4\&.13 or newer: with older kernels, the events are triggered without the UUID and these properties, see
+\fB\-\-settle\fR\&. A kernel that reports version 4\&.13 or newer is taken to support them\&. As older kernels accept such an event without sending it, and may have the support backported, on a kernel that reports an older version the first event of each
+\fBudevadm trigger\fR
+call and the first one of
+\fBudevd\fR
+find out whether the kernel supports them: the event is triggered with the UUID, and if it does not arrive within a second, again without it, and that event decides, as Linux 4\&.13 and newer add
+SYNTH_UUID=0
+to it, and older kernels do not\&. When neither arrives, e\&.g\&. for a disk whose events the kernel suppresses while it reads its partition table, nothing is decided, and the next event finds out\&. The result is kept until
+\fBudevadm\fR
+exits, and in
+\fBudevd\fR, which shares it with its workers and other child processes, until
+\fBudevd\fR
+exits\&. A decided result is also stored in
+/run/udev/uevent\-uuid\-support, together with the boot ID and the release of the kernel, so that later
+\fBudevadm\fR
+runs and a restarted
+\fBudevd\fR
+use it instead of finding out again, until the next boot; a file of another boot or kernel, or one that cannot be parsed, is ignored and replaced, and temporary files that a process killed while storing the result left behind are removed\&. When
+/run/udev
+does not exist or cannot be written, every process finds out on its own\&. The kernel builds every event in a buffer of 2048 bytes for at most 32 properties, 64 since Linux 5\&.8 (commit 655078f5f528):
+ACTION,
+DEVPATH
+and
+SUBSYSTEM, then
+SYNTH_UUID
+and the arguments, then the properties of the device, as its
+uevent
+file shows them, and
+SEQNUM\&. When they do not fit, depending on where the room ran out, the kernel sends the event without some properties of the device, with a warning with a backtrace, and reports no error, or refuses the event, with such a warning, or without one for an input device whose bitmaps, e\&.g\&.\&
+KEY, or
+MODALIAS
+do not fit\&. So before an event is triggered with the UUID, the
+uevent
+file of the device is read, and the arguments, and then also the UUID, are left out when the event would not fit with them, with some room to spare\&. Since Linux 6\&.10 (commit 0774d19038c4), which the stable releases 4\&.19\&.317, 5\&.4\&.279, 5\&.10\&.221, 5\&.15\&.162, 6\&.1\&.95, 6\&.6\&.33, 6\&.8\&.12 and 6\&.9\&.3 got too, the kernel cuts keys off the end of the
+MODALIAS
+of an input device that does not fit, puts
++,
+after the remaining ones, and keeps 96 bytes free behind it for the properties that come after it; a
+MODALIAS
+whose keys already end that way shows such a kernel, whatever version it reports\&. There the event of an input device is counted as the kernel counts it, and only the UUID, which is needed to recognize the event, may cost it some of these keys; the arguments are only written when the event fits with all of them\&. The file of a power supply is not read, as the kernel asks the hardware for its properties then: before Linux 5\&.8, which allows only 32 properties, the arguments, and then the UUID, are only written when they fit with as many properties as the kernel can add for it, its name and one for each readable attribute file of the power supply; from 5\&.8 on, its event is small\&. Nor is the file of a remote control receiver (subsystem
+rc) read, as the kernel may have to wait then until its driver has sent an infrared signal; its event is small\&. On the kernel series 4\&.19, 5\&.4, 5\&.10, 5\&.15, 6\&.1, 6\&.6 and 6\&.9 to 6\&.14, no
+uevent
+file is read, and only the bound of a power supply is counted, as some of their releases take the lock of the device to fill its
+uevent
+file (added by Linux commits c0a40097f0bc and 9a71892cbcdb, and taken out by 15fffc6a5624 and dc1771f71854), so that a read waits for as long as a driver probes the device, which can take minutes; the whole series counts, as the release does not tell the stable release on some distributions, e\&.g\&.\&
+6\&.1\&.0\-NN\-amd64\&. There, an event that does not fit with the arguments and the UUID loses properties of the device, with a warning of the kernel, or is refused, e\&.g\&. the one of a large input device, without a warning; on the releases that cut the
+MODALIAS
+of an input device, the arguments may cost it keys\&. The devices are matched without reading their
+uevent
+files, also there, but for
+\fB\-\-property\-match\fR,
+\fB\-\-initialized\-match\fR
+and
+\fB\-\-initialized\-nomatch\fR, which read them, and the lookup of a network interface by its index, with
+\fB\-\-tag\-match\fR
+or a device ID such as
+n1, which reads its file when its
+ifindex
+attribute cannot be read or parsed\&. On these series, but for a power supply that may not fit with them, and when the file is not read otherwise, or cannot be read, the arguments and the UUID are written, and when the kernel refuses an event because the properties no longer fit, the event is triggered again without them, and then also without the UUID\&. With a uevent helper set in
+/sys/kernel/uevent_helper, the kernel adds properties for it after it sent the event, which the check counts; when they do not fit nevertheless, the kernel reports the error although it sent the event, and the device gets the event a second time from the one triggered again\&. Linux 4\&.13 to 4\&.20 do not report that they refused an event: the write succeeds although no event was sent, until Linux 5\&.0 (commit df44b479654f), which the stable releases 4\&.14\&.99, 4\&.19\&.21 and 4\&.20\&.8 got too\&. So on kernels that report such a version, or one before 4\&.13, which may have the UUIDs backported, or a release that does not start with a version,
+/sys/kernel/uevent_seqnum, the sequence number of the last event the kernel sent, is also read before and after each write with the UUID, and if it did not change, the kernel sent no event, and the event is triggered again in the same way; this also applies to the events that
+\fBudevd\fR
+triggers itself\&. The version is taken from the release of the kernel, which on some distributions does not tell the stable release, e\&.g\&.\&
+4\&.19\&.0\-21\-amd64, which counts as 4\&.19\&.0\&. If another event was sent between the two reads, e\&.g\&. of another device, the number changed, and an event that such a kernel refused is not noticed: the device gets no event from this trigger, and
+\fB\-\-settle\fR
+waits for it until it gives up, see there\&. The other kernels report it, so these reads and the repeated writes are left out there\&. No kernel reports an error for an event that it drops because it suppresses the events of the device, e\&.g\&. of a disk while it reads its partition table\&.
+.PP
+\fB\-v\fR, \fB\-\-verbose\fR
+.RS 4
+Print the list of devices which will be triggered\&.
+.RE
+.PP
+\fB\-n\fR, \fB\-\-dry\-run\fR
+.RS 4
+Do not actually trigger the event\&.
+.RE
+.PP
+\fB\-q\fR, \fB\-\-quiet\fR
+.RS 4
+Suppress error logging in triggering events\&.
+.RE
+.PP
+\fB\-t\fR, \fB\-\-type=\fR\fB\fITYPE\fR\fR
+.RS 4
+Trigger a specific type of devices\&. Valid types are:
+\fBdevices\fR,
+\fBsubsystems\fR,
+\fBall\fR\&. The default value is
+\fBdevices\fR\&.
+.RE
+.PP
+\fB\-c\fR, \fB\-\-action=\fR\fB\fIACTION\fR\fR
+.RS 4
+Type of event to be triggered\&. Possible actions are
+add,
+remove,
+change,
+move,
+online,
+offline,
+bind, and
+unbind\&. Also, the special value
+help
+can be used to list the possible actions\&. The default value is
+change\&. The
+bind
+and
+unbind
+actions need Linux 4\&.14 or later\&.
+.sp
+The triggered events run the rules like the events of the kernel\&. With
+change, e\&.g\&. a sound card is triggered together with its children: its own
+change
+event, which sets
+SOUND_INITIALIZED=1
+(see
+78\-sound\-card\&.rules), runs before the events of its children of the same call, as the event of their parent; the
+change
+event of the card that the event of its control device triggers follows after them, so the card gets two such events, see
+\fBudev\fR(7)\&.
+.RE
+.PP
+\fB\-\-prioritized\-subsystem=\fR\fB\fISUBSYSTEM\fR\fI[,\fISUBSYSTEM\fR\&...]\fR\fR
+.RS 4
+Takes a comma separated list of subsystems\&. When triggering events for devices, the devices from the specified subsystems and their parents are triggered first\&. For example, if
+\fB\-\-prioritized\-subsystem=block,net\fR, then firstly all block devices and their parents are triggered, in the next all network devices and their parents are triggered, and lastly the other devices are triggered\&. This option can be specified multiple times, and in that case the lists of the subsystems will be merged\&. That is,
+\fB\-\-prioritized\-subsystem=block \-\-prioritized\-subsystem=net\fR
+is equivalent to
+\fB\-\-prioritized\-subsystem=block,net\fR\&.
+.RE
+.PP
+\fB\-s\fR, \fB\-\-subsystem\-match=\fR\fB\fISUBSYSTEM\fR\fR
+.RS 4
+Trigger events for devices which belong to a matching subsystem\&. This option can be specified multiple times and supports shell style pattern matching\&.
+.RE
+.PP
+\fB\-S\fR, \fB\-\-subsystem\-nomatch=\fR\fB\fISUBSYSTEM\fR\fR
+.RS 4
+Do not trigger events for devices which belong to a matching subsystem\&. This option can be specified multiple times and supports shell style pattern matching\&.
+.RE
+.PP
+\fB\-a\fR, \fB\-\-attr\-match=\fR\fB\fIATTRIBUTE\fR\fR\fB=\fR\fB\fIVALUE\fR\fR
+.RS 4
+Trigger events for devices with a matching sysfs attribute\&. If a value is specified along with the attribute name, the content of the attribute is matched against the given value using shell style pattern matching\&. If no value is specified, the existence of the sysfs attribute is checked\&. The attribute may be a path relative to the device, e\&.g\&.\&
+queue/rotational
+or
+\&.\&./size, unlike in systemd\&. This option can be specified multiple times\&.
+.RE
+.PP
+\fB\-A\fR, \fB\-\-attr\-nomatch=\fR\fB\fIATTRIBUTE\fR\fR\fB=\fR\fB\fIVALUE\fR\fR
+.RS 4
+Do not trigger events for devices with a matching sysfs attribute\&. If a value is specified along with the attribute name, the content of the attribute is matched against the given value using shell style pattern matching\&. If no value is specified, the existence of the sysfs attribute is checked\&. The attribute may be a path relative to the device, e\&.g\&.\&
+queue/rotational
+or
+\&.\&./size, unlike in systemd\&. This option can be specified multiple times\&.
+.RE
+.PP
+\fB\-p\fR, \fB\-\-property\-match=\fR\fB\fIPROPERTY\fR\fR\fB=\fR\fB\fIVALUE\fR\fR
+.RS 4
+Trigger events for devices with a matching property value\&. This option can be specified multiple times and supports shell style pattern matching\&. The properties are read from the
+uevent
+file of each device, which waits on some kernels while a driver probes the device, see above\&.
+.RE
+.PP
+\fB\-g\fR, \fB\-\-tag\-match=\fR\fB\fITAG\fR\fR
+.RS 4
+Trigger events for devices with a matching tag\&. When this option is specified multiple times, devices that have any of the given tags are triggered\&.
+.RE
+.PP
+\fB\-y\fR, \fB\-\-sysname\-match=\fR\fB\fIPATH\fR\fR
+.RS 4
+Trigger events for devices with a matching sys device path\&. This option can be specified multiple times and supports shell style pattern matching\&.
+.RE
+.PP
+\fB\-\-name\-match=\fR\fB\fINAME\fR\fR
+.RS 4
+Trigger events for the device with the given device node name and for all its children\&. A name that does not start with
+/dev/
+is looked up below
+/dev/, e\&.g\&.\&
+sda; the device specifications of the positional arguments are accepted as well\&. When this option is specified more than once, then each matching result is ORed, that is, all specified devices and their children are triggered\&.
+.RE
+.PP
+\fB\-b\fR, \fB\-\-parent\-match=\fR\fB\fISYSPATH\fR\fR
+.RS 4
+Trigger events for the given device and all its children\&. A path that does not start with
+/sys
+is looked up below
+/sys, e\&.g\&.\&
+class/block/sda; the device specifications of the positional arguments are accepted as well\&. When this option is specified more than once, then each matching result is ORed, that is, each specified device and all its children are triggered\&.
+.RE
+.PP
+\fB\-\-initialized\-match\fR, \fB\-\-initialized\-nomatch\fR
+.RS 4
+When
+\fB\-\-initialized\-match\fR
+is specified, trigger events for devices that are already initialized by
+\fBudevd\fR, and skip devices that are not initialized yet\&.
+.sp
+When
+\fB\-\-initialized\-nomatch\fR
+is specified, trigger events for devices that are not initialized by
+\fBudevd\fR
+yet, and skip devices that are already initialized\&.
+.sp
+Typically, it is essential that applications which intend to use such a match, make sure a suitable udev rule is installed that sets at least one property on devices that shall be matched\&. See also Initialized Devices section below for more details\&.
+.sp
+To tell whether a device is initialized, its
+uevent
+file is read, which waits on some kernels while a driver probes the device, see above\&.
+.sp
+WARNING:
+\fB\-\-initialized\-nomatch\fR
+can potentially save a significant amount of time compared to re\-triggering all devices in the system and e\&.g\&. can be used to optimize boot time\&. However, this is not safe to be used in a boot sequence in general\&. Especially, when udev rules for a device depend on its parent devices (e\&.g\&.\&
+ATTRS
+or
+IMPORT{parent}
+keys, see
+\fBudev\fR(7)
+for more details), the final state of the device becomes easily unstable with this option\&.
+.RE
+.PP
+\fB\-\-include\-parents\fR
+.RS 4
+Trigger parent devices of found devices even if the parents will not match the filter condition\&. This is useful if we are interested to limit the coldplug activities to some devices or subsystems\&.
+.RE
+.PP
+\fB\-w\fR, \fB\-\-settle\fR
+.RS 4
+Apart from triggering events, also waits for those events to finish\&. Note that this is different from calling
+\fBudevadm settle\fR\&.
+\fBudevadm settle\fR
+waits for all events to finish\&. This option only waits for events triggered by the same command to finish\&. The events are recognized by their UUIDs, see
+\fB\-\-uuid\fR\&. As kernels before Linux 4\&.13 do not support them, on a kernel that reports an older version
+\fBudevadm\fR
+finds out with the first event whether the kernel passes the UUID on (see above), which may take a second or two, and triggers the events without UUIDs then, and waits for an event of each triggered device instead, as for an event that was triggered without a UUID before it was known\&. Devices without a subsystem, e\&.g\&.\&
+/sys/devices/platform
+with
+\fB\-\-include\-parents\fR, and hidden block devices, whose
+hidden
+attribute is 1, e\&.g\&. the path devices of native NVMe multipath (nvme0c0n1), are not waited for, as the kernel sends no events for them; hidden block devices only on the kernels that suppress their events for good, since Linux 5\&.12 (commit 9ec491447b90), and the stable releases 5\&.11\&.11, 5\&.10\&.27, 5\&.4\&.109 and 4\&.19\&.184\&. From Linux 4\&.15 to those, the kernel sends the events of a hidden block device that are triggered, although it sent no
+add
+event for it, so they are triggered and waited for like those of other devices\&.
+.sp
+Neither is a device for which the kernel sends no event when it is triggered, e\&.g\&. a disk whose partition table the kernel is still reading after the disk appeared, as the kernel suppresses its events until then (the
+add
+event of the disk follows, without the UUID):
+\fBudevadm\fR
+reads
+/sys/kernel/uevent_seqnum, the sequence number of the last event the kernel sent, before and after it triggers the event of a device, and if the number did not change, the kernel sent nothing\&. If it changed, e\&.g\&. as other devices sent events meanwhile, the event is waited for, but not for ever: when none of the remaining events arrived for as long as
+\fBudevd\fR
+may take to process an event and pass it on, after the last of the triggered events that arrived, or after the devices were triggered,
+\fBudevadm\fR
+stops waiting, with a warning that names each device, and the UUID of its event, and exits with status 1\&. That is up to 3 minutes while a process holds a lock on the block device, then the event timeout, then 10 seconds before the timeout signal, and 5 seconds, or 90 seconds for a signal that dumps core, before SIGKILL, and 30 seconds more: by default 8 minutes and 10 seconds\&. The event timeout is taken from
+\fIudev\&.event_timeout=\fR
+on the kernel command line, or
+\fIevent_timeout=\fR
+in
+\fBudev.conf\fR(5), or is 180 seconds;
+\fBudevadm\fR
+cannot know the one of
+\fBudevd \-\-event\-timeout\fR\&. An event that did not arrive by then never will, e\&.g\&. as the kernel did not send it, although the sequence number changed, as another event was sent at the same time, or as the kernel ran out of room for the event after it took the number\&. When
+\fBudevd\fR
+does not run (see
+\fB\-\-wait\-daemon\fR), no event arrives, so
+\fBudevadm\fR
+stops waiting after that time too\&.
+.sp
+Only the events that
+\fBudevadm trigger\fR
+triggered itself are waited for, not the events that rules trigger in response to them, e\&.g\&. the
+change
+event of a sound card that
+78\-sound\-card\&.rules
+triggers from the event of its control device, see
+\fBudev\fR(7), which may start only after
+\fBudevadm trigger\fR
+returned\&.
+\fBudevadm settle\fR
+waits for those too\&.
+.RE
+.PP
+\fB\-\-uuid\fR
+.RS 4
+Print the randomized UUIDs that the synthetic device events are triggered with to standard output, one line for each event\&. These UUIDs are included in the uevent environment block (in the
+SYNTH_UUID=
+property) and may be used to track delivery of the generated events\&. This requires Linux 4\&.13 or newer: with older kernels, the events are triggered without UUIDs, with a warning, and no UUIDs are printed, see
+\fB\-\-settle\fR\&. No UUID is printed, with a warning, for an event that was triggered without one before it was known whether the kernel supports them\&. No UUID is printed for a device without a subsystem or a hidden block device whose events the kernel suppresses (see
+\fB\-\-settle\fR), which is triggered without one, as the kernel sends no event for it, for a device for which the kernel sent no event when it was triggered (see
+\fB\-\-settle\fR), and for a device whose event would not fit into the buffer of the kernel with the UUID, or that the kernel refused with it, which is triggered without one, with a warning\&.
+.RE
+.PP
+\fB\-\-wait\-daemon[=\fR\fB\fISECONDS\fR\fR\fB]\fR
+.RS 4
+Before triggering uevents, wait for udevd daemon to be initialized\&. Optionally takes timeout value\&. Default timeout is 5 seconds\&. This is equivalent to invoking
+\fBudevadm control \-\-ping\fR
+before
+\fBudevadm trigger\fR\&.
+.RE
+.PP
+\fB\-V\fR, \fB\-\-version\fR
+.RS 4
+Print version\&.
+.RE
+.PP
+\fB\-h\fR, \fB\-\-help\fR
+.RS 4
+Print help text\&.
+.RE
+.PP
+In addition optional positional arguments can be used to specify devices, as for
+\fBudevadm info\fR: a device node, e\&.g\&.\&
+/dev/sda, a sys path, e\&.g\&.\&
+/sys/class/block/sda, or a symlink to either, also relative to the current directory, or a device ID, as shown in the
+J:
+field of
+\fBudevadm info\fR\&. Like with
+\fB\-\-parent\-match=\fR, each of these devices is triggered together with all its children, the devices below it in
+/sys/devices, e\&.g\&.\&
+/dev/sda
+also triggers the partitions of the disk, and
+/sys/class/sound/card0
+the PCM, control and other devices of the sound card\&. To trigger a device without its children, use
+\fB\-\-sysname\-match=\fR\&.
+.SS "udevadm settle [\fIoptions\fR]"
+Watches the udev event queue, and exits if all current events are handled\&.
+.PP
+\fB\-t\fR, \fB\-\-timeout=\fR\fB\fISEC\fR\fR
+.RS 4
+Maximum number of seconds to wait for the event queue to become empty\&. Takes a value in seconds, or in the usual supported time units, e\&.g\&.\&
+500ms
+or
+1min, or
+infinity, which waits without a limit\&. The default value is 120 seconds\&. A value of 0 will check if the queue is empty and always return immediately\&. A non\-zero value will return an exit code of 0 if queue became empty before timeout was reached, non\-zero otherwise\&.
+.RE
+.PP
+\fB\-E\fR, \fB\-\-exit\-if\-exists=\fR\fB\fIFILE\fR\fR
+.RS 4
+Stop waiting if file exists\&.
+.RE
+.PP
+\fB\-V\fR, \fB\-\-version\fR
+.RS 4
+Print version\&.
+.RE
+.PP
+\fB\-h\fR, \fB\-\-help\fR
+.RS 4
+Print help text\&.
+.RE
+.SS "udevadm control \fIcommand\fR"
+Modify the internal state of the running udev daemon\&. All options are parsed before the commands are sent to the daemon, and the timeout applies to all of them\&. Like in systemd, the commands are sent in a fixed order, whatever their order on the command line:
+\fB\-\-revert\fR,
+\fB\-\-log\-level=\fR,
+\fB\-\-stop\-exec\-queue\fR
+or
+\fB\-\-start\-exec\-queue\fR,
+\fB\-\-reload\fR,
+\fB\-\-property=\fR,
+\fB\-\-children\-max=\fR,
+\fB\-\-ping\fR
+and
+\fB\-\-trace=\fR\&. When an option is given more than once, the last one counts, and so does the last one of
+\fB\-\-stop\-exec\-queue\fR
+and
+\fB\-\-start\-exec\-queue\fR; all the properties of
+\fB\-\-property=\fR
+are set\&.
+\fB\-\-exit\fR
+is sent alone, the other commands are ignored then\&. Like in systemd, all the commands are sent over one connection, and then
+\fBudevadm control\fR
+waits once until
+\fBudevd\fR
+handled all of them; an
+\fBudevd\fR
+of an older eudev version, which handles only one command per connection, gets each command over a connection of its own, with a wait each\&. The first command that fails stops
+\fBudevadm control\fR, which then exits with status 1, also when
+\fBudevd\fR
+is too old for a command\&. Sending commands requires root privileges\&.
+.PP
+\fB\-e\fR, \fB\-\-exit\fR
+.RS 4
+Signal and wait for udevd to exit\&.
+.RE
+.PP
+\fB\-l\fR, \fB\-\-log\-level=\fR\fB\fIvalue\fR\fR
+.RS 4
+Set the internal log level of
+udevd\&. Valid values are the numerical syslog priorities or their textual representations:
+\fBemerg\fR,
+\fBalert\fR,
+\fBcrit\fR,
+\fBerr\fR,
+\fBwarning\fR,
+\fBnotice\fR,
+\fBinfo\fR, and
+\fBdebug\fR\&. The special value
+help
+lists the textual representations\&. The old name
+\fB\-\-log\-priority=\fR
+is still accepted\&.
+.RE
+.PP
+\fB\-s\fR, \fB\-\-stop\-exec\-queue\fR
+.RS 4
+Signal udevd to stop executing new events\&. Incoming events will be queued\&.
+.RE
+.PP
+\fB\-S\fR, \fB\-\-start\-exec\-queue\fR
+.RS 4
+Signal udevd to enable the execution of events\&.
+.RE
+.PP
+\fB\-R\fR, \fB\-\-reload\fR
+.RS 4
+Signal udevd to reload the rules files and other databases like the kernel module index\&. Reloading rules and databases does not apply any changes to already existing devices; the new configuration will only be applied to new events\&.
+.RE
+.PP
+\fB\-p\fR, \fB\-\-property=\fR\fB\fIKEY\fR\fR\fB=\fR\fB\fIvalue\fR\fR
+.RS 4
+Set a global property for all events\&.
+.RE
+.PP
+\fB\-m\fR, \fB\-\-children\-max=\fR\fB\fIN\fR\fR
+.RS 4
+Set the maximum number of events, udevd will handle at the same time\&. When 0 is specified, then the maximum is determined based on the system resources\&.
+.RE
+.PP
+\fB\-\-ping\fR
+.RS 4
+Send a ping message to udevd and wait for the reply\&. This may be useful to check that udevd daemon is running\&.
+.RE
+.PP
+\fB\-\-trace=\fR\fB\fIBOOL\fR\fR
+.RS 4
+Enable/disable trace logging in
+\fBudevd\fR\&.
+.RE
+.PP
+\fB\-\-revert\fR
+.RS 4
+Revert settings previously set with
+\fBudevadm control\fR
+command\&. When specified, settings set with
+\fB\-l/\-\-log\-level=\fR,
+\fB\-\-trace\fR,
+\fB\-m/\-\-children\-max=\fR, and
+\fB\-p/\-\-property=\fR
+will be cleared\&.
+.RE
+.PP
+\fB\-t\fR, \fB\-\-timeout=\fR\fB\fISECONDS\fR\fR
+.RS 4
+The maximum number of seconds to wait for a reply from udevd, i\&.e\&. until it handled all the commands, or each command with an older
+\fBudevd\fR\&. Takes a value in seconds, or in the usual supported time units, e\&.g\&.\&
+500ms
+or
+1min, which is rounded up to whole seconds, or
+infinity\&. The default is 60 seconds, which 0 selects too\&.
+.RE
+.PP
+\fB\-V\fR, \fB\-\-version\fR
+.RS 4
+Print version\&.
+.RE
+.PP
+\fB\-h\fR, \fB\-\-help\fR
+.RS 4
+Print help text\&.
+.RE
+.SS "udevadm monitor [\fIoptions\fR]"
+Listens to the kernel uevents and events sent out by a udev rule and prints the devpath of the event to the console\&. It can be used to analyze the event timing, by comparing the timestamps of the kernel uevent and the udev event\&.
+.PP
+\fB\-k\fR, \fB\-\-kernel\fR
+.RS 4
+Print the kernel uevents\&.
+.RE
+.PP
+\fB\-u\fR, \fB\-\-udev\fR
+.RS 4
+Print the udev event after the rule processing\&.
+.RE
+.PP
+\fB\-p\fR, \fB\-\-property\fR
+.RS 4
+Also print the properties of the event\&.
+.RE
+.PP
+\fB\-s\fR, \fB\-\-subsystem\-match=\fR\fB\fIstring[/string]\fR\fR
+.RS 4
+Filter kernel uevents and udev events by subsystem[/devtype]\&. Only events with a matching subsystem value will pass\&. When this option is specified more than once, then each matching result is ORed, that is, all devices in the specified subsystems are monitored, also with several device types of the same subsystem, e\&.g\&.\&
+\-s block/disk \-s block/partition\&.
+.RE
+.PP
+\fB\-t\fR, \fB\-\-tag\-match=\fR\fB\fIstring\fR\fR
+.RS 4
+Filter udev events by tag\&. Only udev events with a given tag attached will pass\&. When this option is specified more than once, the events of devices that have any of the given tags pass\&. Kernel uevents carry no tags, so with this option no kernel uevent passes\&.
+.RE
+.PP
+\fB\-V\fR, \fB\-\-version\fR
+.RS 4
+Print version\&.
+.RE
+.PP
+\fB\-h\fR, \fB\-\-help\fR
+.RS 4
+Print help text\&.
+.RE
+.SS "udevadm hwdb [\fIoptions\fR]"
+Maintain the hardware database index in
+/etc/udev/hwdb\&.bin\&.
+.PP
+\fB\-u\fR, \fB\-\-update\fR
+.RS 4
+Compile the hardware database information located in
+/etc/udev/hwdb\&.d/,
+/usr/lib/udev/hwdb\&.d/, and under the
+\fBUDEV_HWDB_PATH\fR
+path environment variable, and store it in
+/etc/udev/hwdb\&.bin, all below the directory given with
+\fB\-\-root=\fR\&. A relative directory in
+\fBUDEV_HWDB_PATH\fR
+is relative to the directory given with
+\fB\-\-root=\fR, or else to the current directory\&. This should be done after any update to the source files; it will not be called automatically\&. The running udev daemon will detect a new database on its own and does not need to be notified about it\&. If no hwdb files are found, the compiled database is removed\&. A directory of hwdb files that does not exist is skipped, but if one exists and cannot be read, e\&.g\&. because it is not a directory, or a hwdb file cannot be read, the update fails, and the compiled database is kept as it is\&.
+.RE
+.PP
+\fB\-s\fR, \fB\-\-strict\fR
+.RS 4
+When updating, return non\-zero exit value on any parsing error in the source files\&. The database is still created\&.
+.RE
+.PP
+\fB\-\-usr\fR
+.RS 4
+Put the compiled database into
+/usr/lib/udev/hwdb\&.bin
+instead\&. Use this if you want to ship a pre\-compiled database in immutable system images, or want to avoid large binary files in
+/etc
+and do not use
+/etc/udev/hwdb\&.d\&.
+.RE
+.PP
+\fB\-t\fR, \fB\-\-test=\fR\fB\fIstring\fR\fR
+.RS 4
+Query the database with a modalias string, and print the retrieved properties\&. With
+\fB\-\-root=\fR, the database below the root directory is queried\&. Fails if there is no compiled database\&.
+.RE
+.PP
+\fB\-r\fR, \fB\-\-root=\fR\fB\fIstring\fR\fR
+.RS 4
+Alternative root path in the file system for reading and writing files\&. All paths are below it: the directories of the hwdb files, including the ones given in
+\fBUDEV_HWDB_PATH\fR, the compiled database that is written, including the path given with
+\fB\-\-output=\fR, and the database that
+\fB\-\-test=\fR
+queries\&.
+.RE
+.PP
+\fB\-o\fR, \fB\-\-output=\fR\fB\fIstring\fR\fR
+.RS 4
+Specify the exact location where to write the compiled database\&. With
+\fB\-\-root=\fR, the path is below the root directory\&.
+.RE
+.PP
+\fB\-V\fR, \fB\-\-version\fR
+.RS 4
+Print version\&.
+.RE
+.PP
+\fB\-h\fR, \fB\-\-help\fR
+.RS 4
+Print help text\&.
+.RE
+.SS "udevadm test [\fIoptions\fR] [\fIdevpath\fR|\fIfile\fR|\fIid\fR]"
+Simulate a udev event run for the given device, and print debug output\&.
+.PP
+The device may be given as its path in
+/sys, with or without the
+/sys
+prefix, e\&.g\&.\&
+/sys/class/net/eth0
+or
+/class/net/eth0, also a directory of a driver like
+/sys/bus/pci/drivers/e1000e, or as a device node or a symlink to it in
+/dev, e\&.g\&.\&
+/dev/sda, or as its device ID, as shown in the
+J:
+field of
+\fBudevadm info\fR, e\&.g\&.\&
+b8:0\&. The same applies to
+\fBudevadm test\-builtin\fR\&.
+.PP
+This command does not change the system: network interfaces are not renamed and do not get alternative names, device nodes, their permissions and their symlinks are not changed, sysfs attributes and sysctls are not written, and the udev database is not updated\&. Programs specified by
+\fIRUN\fR
+are not executed\&. Programs specified by
+\fIPROGRAM\fR
+and
+\fIIMPORT{program}\fR
+are not executed either, except for the udev helpers
+\fBata_id\fR,
+\fBcdrom_id\fR,
+\fBdmi_memory_id\fR,
+\fBfido_id\fR,
+\fBmtd_probe\fR
+and
+\fBscsi_id\fR, given by their name or by their absolute path in the udev helper directory; any other program is treated as successful with empty output, so the properties it would set are not shown\&. The helpers only read from the device:
+\fBcdrom_id\fR
+is started with
+\fB\-\-dry\-run\fR, so that it does not lock, unlock or eject the media, as it would for
+\fB\-\-lock\-media\fR,
+\fB\-\-unlock\-media\fR
+and
+\fB\-\-eject\-media\fR\&. The built\-in commands act as described for
+\fBudevadm test\-builtin\fR\&. What would be done, i\&.e\&. the network interface name and alternative names, the owner, group, permission and symlinks of the device node, the sysfs attributes and sysctls to write, the tags, the properties and the queued
+\fIRUN\fR
+commands, is printed on standard output, and the debug messages on standard error\&.
+.PP
+\fB\-a\fR, \fB\-\-action=\fR\fB\fIACTION\fR\fR
+.RS 4
+Type of event to be simulated\&. Possible actions are
+add,
+remove,
+change,
+move,
+online,
+offline,
+bind, and
+unbind\&. Also, the special value
+help
+can be used to list the possible actions\&. The default value is
+add\&.
+.RE
+.PP
+\fB\-N\fR, \fB\-\-resolve\-names=\fR\fB\fBearly\fR\fR\fB|\fR\fB\fBlate\fR\fR\fB|\fR\fB\fBnever\fR\fR
+.RS 4
+Specify when
+\fBudevadm\fR
+should resolve names of users and groups specified in udev rules\&. When set to
+\fBearly\fR
+(the default), names will be resolved when the rules are parsed\&. When set to
+\fBlate\fR, names will be resolved during the event being processed\&. When set to
+\fBnever\fR, names will never be resolved, and the
+\fIOWNER\fR
+and
+\fIGROUP\fR
+keys whose value is not a numeric ID, i\&.e\&. a name or a value with substitutions, will be ignored; the other keys of these rules still apply\&.
+.RE
+.PP
+\fB\-D \fR\fB\fIDIR\fR\fR, \fB\-\-extra\-rules\-dir=\fR\fB\fIDIR\fR\fR
+.RS 4
+Also load udev rules files from the specified directory\&. This option can be specified multiple times\&. It may be useful for debugging udev rules by copying some udev rules files to a temporary directory, editing them, and specifying the directory with this option\&. Files found in the specified directories have a higher priority than rules files in the default
+rules\&.d
+directories used by
+\fBudevd\fR\&. See
+\fBudev\fR(7)
+for more details about the search paths\&.
+.RE
+.PP
+\fB\-v\fR, \fB\-\-verbose\fR
+.RS 4
+Shows verbose logs in processing udev rules\&.
+.RE
+.PP
+\fB\-\-json=\fR\fB\fIMODE\fR\fR
+.RS 4
+Shows output formatted as JSON\&. Expects one of
+short
+(for the shortest possible output without any redundant whitespace or line breaks),
+pretty
+(for a pretty version of the same, with indentation and line breaks) or
+off
+(to turn off JSON output, the default)\&.
+.RE
+.PP
+\fB\-V\fR, \fB\-\-version\fR
+.RS 4
+Print version\&.
+.RE
+.PP
+\fB\-h\fR, \fB\-\-help\fR
+.RS 4
+Print help text\&.
+.RE
+.SS "udevadm test\-builtin [\fIoptions\fR] [\fIcommand\fR] [\fIdevpath\fR|\fIfile\fR|\fIid\fR]"
+Run a built\-in command
+\fICOMMAND\fR
+for device
+\fIDEVPATH\fR, and print debug output\&.
+.PP
+This command does not change the system: the
+\fBkmod\fR
+built\-in does not load kernel modules, the
+\fBkeyboard\fR
+built\-in does not change key mappings, and the
+\fBbtrfs\fR
+built\-in only checks its arguments\&.
+.PP
+\fB\-a\fR, \fB\-\-action=\fR\fB\fIACTION\fR\fR
+.RS 4
+Type of event to be simulated\&. Possible actions are
+add,
+remove,
+change,
+move,
+online,
+offline,
+bind, and
+unbind\&. Also, the special value
+help
+can be used to list the possible actions\&. The default value is
+add\&.
+.RE
+.PP
+\fB\-V\fR, \fB\-\-version\fR
+.RS 4
+Print version\&.
+.RE
+.PP
+\fB\-h\fR, \fB\-\-help\fR
+.RS 4
+Print help text\&.
+.RE
+.SS "udevadm verify [\fIoptions\fR] [\fIfile\fR...]"
+Verify syntactic, semantic, and stylistic correctness of udev rules files\&.
+.PP
+Positional arguments can be used to specify one or more files to check\&. Each argument must be an absolute path to a udev rules file or a directory that contains rules files, or a file name of udev rules file (e\&.g\&.\&
+50\-udev\-default\&.rules)\&. If a file name is specified, the file will be searched in the
+rules\&.d
+directories that are processed by
+\fBudevd\fR, and searched in the current working directory if not found\&. If no files are specified, the udev rules are read from the files located in the same
+rules\&.d
+directories that are processed by
+\fBudevd\fR\&. See
+\fBudev\fR(7)
+for more details about the search paths\&.
+.PP
+The exit status is
+\fB0\fR
+if all specified udev rules files are syntactically, semantically, and stylistically correct, and a non\-zero error code otherwise\&.
+.PP
+\fB\-N\fR, \fB\-\-resolve\-names=\fR\fB\fBearly\fR\fR\fB|\fR\fB\fBlate\fR\fR\fB|\fR\fB\fBnever\fR\fR
+.RS 4
+Specify when
+\fBudevadm\fR
+should resolve names of users and groups specified in udev rules\&. When set to
+\fBearly\fR
+(the default), names will be resolved when the rules are parsed\&. When set to
+\fBlate\fR, names will not be verified, as
+\fBudevd\fR
+resolves names during each event being processed\&. When set to
+\fBnever\fR, names will never be resolved, and the
+\fIOWNER\fR
+and
+\fIGROUP\fR
+keys whose value is not a numeric ID, i\&.e\&. a name or a value with substitutions, will be ignored, as
+\fBudevd\fR
+ignores them with this setting; the other keys of these rules are still verified\&.
+.RE
+.PP
+\fB\-\-root=\fR\fB\fIPATH\fR\fR
+.RS 4
+When looking for udev rules files located in the
+rules\&.d
+directories, operate on files underneath the specified root path
+\fIPATH\fR\&. When a file name is specified, and it is not found in the
+rules\&.d
+directories, the file will be searched in the specified root path
+\fIPATH\fR, rather than the current working directory\&.
+.RE
+.PP
+\fB\-\-no\-summary\fR
+.RS 4
+Do not show summary\&.
+.RE
+.PP
+\fB\-\-no\-style\fR
+.RS 4
+Ignore style issues\&. When specified, even if style issues are found in udev rules files, the exit status is
+\fB0\fR
+if no syntactic or semantic errors are found\&.
+.RE
+.PP
+\fB\-V\fR, \fB\-\-version\fR
+.RS 4
+Print version\&.
+.RE
+.PP
+\fB\-h\fR, \fB\-\-help\fR
+.RS 4
+Print help text\&.
+.RE
+.SS "udevadm cat [\fIoptions\fR] [\fIfile\fR...]"
+Show udev rules files or udev\&.conf\&.
+.PP
+Positional arguments can be used to specify one or more files to show\&. Each argument must be an absolute path to a udev rules file or a directory that contains rules files, or a file name of udev rules file (e\&.g\&.\&
+50\-udev\-default\&.rules)\&. If a file name is specified, the file will be searched in the
+rules\&.d
+directories that are processed by
+\fBudevd\fR, and searched in the current working directory if not found\&. If no files are specified, the udev rules are read from the files located in the same
+rules\&.d
+directories that are processed by
+\fBudevd\fR\&. See
+\fBudev\fR(7)
+for more details about the search paths\&.
+.PP
+\fB\-\-root=\fR\fB\fIPATH\fR\fR
+.RS 4
+When looking for udev rules files located in the
+rules\&.d
+directories, operate on files underneath the specified root path
+\fIPATH\fR\&. When a file name is specified, and it is not found in the
+rules\&.d
+directories, the file will be searched in the specified root path
+\fIPATH\fR, rather than the current working directory\&.
+.RE
+.PP
+\fB\-\-tldr\fR
+.RS 4
+Only print the "interesting" parts of the configuration files, skipping comments and empty lines\&.
+.RE
+.PP
+\fB\-\-config\fR
+.RS 4
+Shows
+\fBudev.conf\fR(5)
+files, the main configuration file and its drop\-ins, rather than udev rules files\&. When specified, no udev rules file can be specified\&. A mask of the main configuration file, i\&.e\&. a symlink to
+/dev/null
+or an empty file, is shown as such\&.
+.RE
+.PP
+\fB\-V\fR, \fB\-\-version\fR
+.RS 4
+Print version\&.
+.RE
+.PP
+\fB\-h\fR, \fB\-\-help\fR
+.RS 4
+Print help text\&.
+.RE
+.SS "udevadm wait [\fIoptions\fR] \fIdevice|syspath\fR..."
+Wait for devices or device symlinks being created and initialized by
+\fBudevd\fR\&. Each device path must start with
+/dev/
+or
+/sys/, e\&.g\&.\&
+/dev/sda,
+/dev/disk/by\-path/pci\-0000:3c:00\&.0\-nvme\-1\-part1,
+/sys/devices/pci0000:00/0000:00:1f\&.6/net/eth0, or
+/sys/class/net/eth0\&. This can take multiple devices\&. This may be useful for waiting for devices being processed by
+\fBudevd\fR
+after e\&.g\&. partitioning or formatting the devices\&.
+.PP
+\fB\-t\fR, \fB\-\-timeout=\fR\fB\fISEC\fR\fR
+.RS 4
+Maximum number of seconds to wait for the specified devices or device symlinks being created, initialized, or removed\&. The default value is
+infinity\&.
+.RE
+.PP
+\fB\-\-initialized=\fR\fB\fIBOOL\fR\fR
+.RS 4
+Check if
+\fBudevd\fR
+initialized devices\&. Defaults to true\&. When false, the command only checks if the specified devices exist\&. Set false to this setting if there is no udev rules for the specified devices, as the devices will never be considered as initialized in that case\&. See Initialized Devices section below for more details\&.
+.RE
+.PP
+\fB\-\-removed\fR
+.RS 4
+When specified, the command wait for devices being removed instead of created or initialized\&. If this is specified,
+\fB\-\-initialized=\fR
+will be ignored\&.
+.RE
+.PP
+\fB\-\-settle\fR
+.RS 4
+When specified, also watches the udev event queue, and wait for all queued events being processed by
+\fBudevd\fR\&.
+.RE
+.PP
+\fB\-V\fR, \fB\-\-version\fR
+.RS 4
+Print version\&.
+.RE
+.PP
+\fB\-h\fR, \fB\-\-help\fR
+.RS 4
+Print help text\&.
+.RE
+.SS "udevadm lock [\fIoptions\fR] \fIcommand\fR..."
+\fBudevadm lock\fR
+takes an (advisory) exclusive lock on a block device (or all specified devices), as per
+\m[blue]\fBLocking Block Device Access\fR\m[]\&\s-2\u[2]\d\s+2
+and invokes a program with the locks taken\&. When the invoked program exits the locks are automatically released and its return value is propagated as exit code of
+\fBudevadm lock\fR\&.
+.PP
+This tool is in particular useful to ensure that
+\fBudevd\fR(8)
+does not probe a block device while changes are made to it, for example partitions created or file systems formatted\&. Note that many tools that interface with block devices natively support taking relevant locks, see for example
+\fBsfdisk\fR(8)\*(Aqs
+\fB\-\-lock\fR
+switch\&.
+.PP
+While another program holds an exclusive lock on a block device,
+\fBudevd\fR
+postpones the events of the device and of its partitions, and handles them once the lock is released\&. It tries again every 200 ms, and at once when it receives a new event for the device or one of its partitions, or, for a watched device (see
+OPTIONS+="watch"
+in
+\fBudev\fR(7)), when the device is closed after it was opened for writing, as
+\fBudevadm lock\fR
+does\&.
+\fBudevadm settle\fR
+waits for the postponed events too\&. If the device is still locked 3 minutes after the first try, the event is dropped: it is passed on to listeners as it was received from the kernel, and the entry of the device in the udev database stays as it was after its previous event\&.
+.PP
+The command expects at least one block device specified via
+\fB\-\-device=\fR
+or
+\fB\-\-backing=\fR, and a command line to execute as arguments\&.
+.PP
+\fB\-\-device=\fR\fB\fIDEVICE\fR\fR, \fB\-d \fR\fB\fIDEVICE\fR\fR
+.RS 4
+Takes a path to a device node of the device to lock\&. This switch may be used multiple times (and in combination with
+\fB\-\-backing=\fR) in order to lock multiple devices\&. If a partition block device node is specified the containing "whole" block device is automatically determined and used for the lock, as per the specification\&. If multiple devices are specified, they are deduplicated, sorted by the major/minor of their device nodes and then locked in order\&.
+.sp
+This switch must be used at least once, to specify at least one device to lock\&. (Alternatively, use
+\fB\-\-backing=\fR, see below\&.)
+.RE
+.PP
+\fB\-\-backing=\fR\fB\fIPATH\fR\fR, \fB\-b \fR\fB\fIPATH\fR\fR
+.RS 4
+If a path to a device node is specified, identical to
+\fB\-\-device=\fR\&. However, this switch alternatively accepts a path to a regular file or directory, in which case the block device of the file system the file/directory resides on is automatically determined and used as if it was specified with
+\fB\-\-device=\fR\&.
+.RE
+.PP
+\fB\-\-timeout=\fR\fB\fISECS\fR\fR, \fB\-t \fR\fB\fISECS\fR\fR
+.RS 4
+Specifies how long to wait at most until all locks can be taken\&. Takes a value in seconds, or in the usual supported time units, e\&.g\&.\&
+500ms
+or
+1min 30s\&. If specified as zero the lock is attempted and if not successful the invocation will immediately fail\&. If passed as
+infinity
+(the default) the invocation will wait indefinitely until the lock can be acquired\&. If the lock cannot be taken in the specified time the specified command will not be executed and the invocation will fail\&.
+.RE
+.PP
+\fB\-\-print\fR, \fB\-p\fR
+.RS 4
+Instead of locking the specified devices and executing a command, just print the device paths that would be locked, and execute no command\&. This command is useful to determine the "whole" block device in case a partition block device is specified\&. The devices will be sorted by their device node major number as primary ordering key and the minor number as secondary ordering key (i\&.e\&. they are shown in the order they\*(Aqd be locked)\&. Note that the number of lines printed here can be less than the number of
+\fB\-\-device=\fR
+and
+\fB\-\-backing=\fR
+switches specified in case these resolve to the same "whole" devices\&.
+.RE
+.PP
+\fB\-V\fR, \fB\-\-version\fR
+.RS 4
+Print version\&.
+.RE
+.PP
+\fB\-h\fR, \fB\-\-help\fR
+.RS 4
+Print help text\&.
+.RE
+.SH "ENVIRONMENT"
+When
+\fBudevadm\fR
+has no controlling terminal, e\&.g\&. when it is run by
+\fBudevd\fR
+or by an init script, it reads the log settings of the kernel command line first, like systemd before version 248, see
+\fBudevd\fR(8): e\&.g\&.\&
+\fIsystemd\&.log_level=\fR
+like
+\fI$SYSTEMD_LOG_LEVEL\fR, and
+\fIdebug\fR
+like
+\fIsystemd\&.log_level=debug\fR; the variables below take precedence over them\&.
+.PP
+\fI$UDEV_LOG_LEVEL\fR, \fI$SYSTEMD_LOG_LEVEL\fR
+.RS 4
+The maximum log level of emitted messages (messages with a higher log level, i\&.e\&. less important ones, are suppressed)\&. Takes a comma\-separated list of values\&. A value may be either one of (in order of decreasing importance)
+\fBemerg\fR,
+\fBalert\fR,
+\fBcrit\fR,
+\fBerr\fR,
+\fBwarning\fR,
+\fBnotice\fR,
+\fBinfo\fR,
+\fBdebug\fR, or an integer in the range 0\&...7, also with a
+0x,
+0o
+or
+0b
+prefix\&. See
+\fBsyslog\fR(3)
+for more information\&. Each value may optionally be prefixed with one of
+\fBconsole\fR,
+\fBsyslog\fR
+or
+\fBkmsg\fR
+followed by a colon to set the maximum log level for that specific log target (e\&.g\&.\&
+\fBSYSTEMD_LOG_LEVEL=debug,console:info\fR
+specifies to log at debug level except when logging to the console which should be at info level)\&. Note that the global maximum log level takes priority over any per target maximum log levels\&. It overrides
+\fIudev_log=\fR
+of
+\fBudev.conf\fR(5), and
+\fB\-\-debug\fR
+overrides it\&. Like the other
+\fI$UDEV_LOG_*\fR
+variables,
+\fI$UDEV_LOG_LEVEL\fR
+takes precedence over
+\fI$SYSTEMD_LOG_LEVEL\fR, which is used like in systemd\&.
+.RE
+.PP
+\fI$UDEV_LOG_TARGET\fR, \fI$SYSTEMD_LOG_TARGET\fR
+.RS 4
+The destination for log messages\&. One of
+\fBconsole\fR
+(log to the attached tty),
+\fBconsole\-prefixed\fR
+(log to the attached tty but with prefixes encoding the log level and "facility", see
+\fBsyslog\fR(3)),
+\fBkmsg\fR
+(log to the kernel circular log buffer),
+\fBsyslog\fR
+(log to
+/dev/log),
+\fBsyslog\-or\-kmsg\fR
+(log to
+/dev/log
+if available, and to kmsg otherwise),
+\fBauto\fR
+(log to kmsg if it can be written, and to the attached tty otherwise),
+\fBsafe\fR
+(log to kmsg if standard error is not a tty, and to the attached tty otherwise),
+\fBnull\fR
+(disable log output)\&. The default is
+\fBconsole\fR\&.
+.RE
+.PP
+\fI$UDEV_LOG_COLOR\fR, \fI$SYSTEMD_LOG_COLOR\fR
+.RS 4
+A boolean\&. If true, messages written to the tty are colored according to their log level, like in systemd: errors and more important ones in red, warnings in yellow, notices highlighted and debug messages in grey\&. The default is true\&. Colors are used only when standard output and standard error are terminals, see
+\fI$SYSTEMD_COLORS\fR
+below\&.
+.RE
+.PP
+\fI$UDEV_LOG_LOCATION\fR, \fI$SYSTEMD_LOG_LOCATION\fR
+.RS 4
+A boolean\&. If true, messages written to the tty are prefixed with a filename and line number in the source code where the message originates\&. The filename is relative to the top of the source tree, e\&.g\&.\&
+src/udev/udevadm\&.c, like in systemd\&.
+.RE
+.PP
+\fI$UDEV_LOG_TIME\fR, \fI$SYSTEMD_LOG_TIME\fR
+.RS 4
+A boolean\&. If true, messages written to the tty are prefixed with the local time, e\&.g\&.\&
+Mon 2026\-10\-05 12:34:56 EEST, like in systemd\&.
+.RE
+.PP
+\fI$UDEV_LOG_TID\fR, \fI$SYSTEMD_LOG_TID\fR
+.RS 4
+A boolean\&. If true, messages written to the tty are prefixed with the numerical thread ID (TID) in parentheses, like in systemd\&.
+.RE
+.PP
+\fI$UDEV_LOG_RATELIMIT_KMSG\fR, \fI$SYSTEMD_LOG_RATELIMIT_KMSG\fR
+.RS 4
+A boolean, true by default\&. If true, like in systemd, at most 200 messages in 5 seconds are written to the kernel log buffer by each process; the first message that is dropped is replaced by
+Too many messages being logged to kmsg, ignoring\&. If false, the messages written to kmsg are not rate limited\&.
+.RE
+.PP
+\fI$SYSTEMD_COLORS\fR
+.RS 4
+Takes a boolean argument, or a special value\&. By default (unset),
+\fBudevadm\fR
+uses colors in its output if standard output and standard error are terminals, and
+\fI$TERM\fR
+is set and not
+dumb\&. If
+\fI$COLORTERM\fR
+is set to
+truecolor
+or
+24bit, 24\-bit colors will be enabled, 256 colors otherwise\&. If
+\fI$NO_COLOR\fR
+is set (to any value), no colors are used\&.
+.PP
+\fBtrue\fR
+.RS 4
+Same as unset, except that
+\fI$NO_COLOR\fR
+is ignored\&.
+.RE
+.PP
+\fBfalse\fR
+.RS 4
+The output will be monochrome\&.
+.RE
+.PP
+16, 256, 24bit
+.RS 4
+Always use the base 16 ANSI colors, 256 colors, or 24 bit color, respectively\&.
+.RE
+.PP
+auto\-16, auto\-256, auto\-24bit
+.RS 4
+Use the given quantity of colours, subject to
+\fI$TERM\fR, and what the console is connected to\&.
+.RE
+.RE
+.PP
+\fI$SYSTEMD_PAGER\fR, \fI$PAGER\fR
+.RS 4
+Pager to use for the output of
+\fBudevadm info\fR
+when
+\fB\-\-no\-pager\fR
+is not given, and for the help texts, if standard output and standard error are terminals\&.
+\fI$SYSTEMD_PAGER\fR
+is used if set; otherwise
+\fI$PAGER\fR
+is used\&. If neither
+\fI$SYSTEMD_PAGER\fR
+nor
+\fI$PAGER\fR
+are set, a set of well\-known pager implementations is tried in turn, including
+\fBless\fR(1)
+and
+\fBmore\fR(1), until one is found\&. If no pager implementation is discovered, no pager is invoked\&. Setting those environment variables to an empty string or the value
+cat
+is equivalent to passing
+\fB\-\-no\-pager\fR\&.
+.sp
+Note: if
+\fI$SYSTEMD_PAGERSECURE\fR
+is not set,
+\fI$SYSTEMD_PAGER\fR
+and
+\fI$PAGER\fR
+can only be used to disable the pager (with
+cat
+or an empty string), and are otherwise ignored\&.
+.RE
+.PP
+\fI$SYSTEMD_LESS\fR
+.RS 4
+Override the options passed to
+\fBless\fR
+(by default
+FRSXMK)\&.
+.sp
+Users might want to change two options in particular:
+.PP
+\fBK\fR
+.RS 4
+This option instructs the pager to exit immediately when
+Ctrl+C
+is pressed\&. To allow
+\fBless\fR
+to handle
+Ctrl+C
+itself to switch back to the pager command prompt, unset this option\&.
+.sp
+If the value of
+\fI$SYSTEMD_LESS\fR
+does not include
+K, and the pager that is invoked is
+\fBless\fR,
+Ctrl+C
+will be ignored by the executable, and needs to be handled by the pager\&.
+.RE
+.PP
+\fBX\fR
+.RS 4
+This option instructs the pager to not send termcap initialization and deinitialization strings to the terminal\&. It is set by default to allow command output to remain visible in the terminal even after the pager exits\&. Nevertheless, this prevents some pager functionality from working, in particular paged output cannot be scrolled with the mouse\&.
+.RE
+.sp
+Note that setting the regular
+\fI$LESS\fR
+environment variable has no effect for
+\fBless\fR
+invocations by
+\fBudevadm\fR\&.
+.sp
+See
+\fBless\fR(1)
+for more discussion\&.
+.RE
+.PP
+\fI$SYSTEMD_LESSCHARSET\fR
+.RS 4
+Override the charset passed to
+\fBless\fR
+(by default
+utf\-8, if the invoking terminal is determined to be UTF\-8 compatible)\&.
+.sp
+Note that setting the regular
+\fI$LESSCHARSET\fR
+environment variable has no effect for
+\fBless\fR
+invocations by
+\fBudevadm\fR\&.
+.RE
+.PP
+\fI$SYSTEMD_PAGERSECURE\fR
+.RS 4
+Common pager commands like
+\fBless\fR(1), in addition to "paging", i\&.e\&. scrolling through the output, support opening of or writing to other files and running arbitrary shell commands\&. When commands are invoked with elevated privileges, for example under
+\fBsudo\fR(8), the pager becomes a security boundary\&. Care must be taken that only programs with strictly limited functionality are used as pagers, and unintended interactive features like opening or creation of new files or starting of subprocesses are not allowed\&. "Secure mode" for the pager may be enabled as described below,
+\fIif the pager supports that\fR
+(most pagers are not written in a way that takes this into consideration)\&. It is recommended to either explicitly enable "secure mode" or to completely disable the pager using
+\fB\-\-no\-pager\fR
+or
+\fIPAGER=cat\fR
+when allowing untrusted users to execute commands with elevated privileges\&.
+.sp
+This option takes a boolean argument\&. When set to true, the "secure mode" of the pager is enabled\&. In "secure mode",
+\fBLESSSECURE=1\fR
+will be set when invoking the pager, which instructs the pager to disable commands that open or create new files or start new subprocesses\&. Currently only
+\fBless\fR(1)
+is known to understand this variable and implement "secure mode"\&.
+.sp
+When set to false, no limitation is placed on the pager\&. Setting
+\fISYSTEMD_PAGERSECURE=0\fR
+or not removing it from the inherited environment may allow the user to invoke arbitrary commands\&.
+.sp
+When
+\fI$SYSTEMD_PAGERSECURE\fR
+is not set,
+\fBudevadm\fR
+attempts to automatically figure out if "secure mode" should be enabled and whether the pager supports it\&. "Secure mode" is enabled if the effective UID is not the same as the audit login UID, i\&.e\&. the UID of the user who logged in (see
+/proc/self/loginuid), if the audit login UID is not set, or when running under
+\fBsudo\fR(8)
+or similar tools (\fI$SUDO_UID\fR
+is set)\&. In those cases,
+\fILESSSECURE=1\fR
+will be set and pagers which are not known to implement "secure mode" will not be used at all\&. Note that this autodetection only covers the most common mechanisms to elevate privileges and is intended as convenience\&. It is recommended to explicitly set
+\fI$SYSTEMD_PAGERSECURE\fR
+or disable the pager\&.
+.sp
+Note that if the
+\fI$SYSTEMD_PAGER\fR
+or
+\fI$PAGER\fR
+variables are to be honoured, other than to disable the pager,
+\fI$SYSTEMD_PAGERSECURE\fR
+must be set too\&.
+.RE
+.PP
+\fI$SYSTEMD_URLIFY\fR
+.RS 4
+The value must be a boolean\&. Controls whether clickable links should be generated in the output for terminal emulators supporting this, e\&.g\&. for the file names shown by
+\fBudevadm cat\fR
+and the man pages mentioned in the help texts\&. This can be specified to override the decision that
+\fBudevadm\fR
+makes based on whether colors are used, see
+\fI$SYSTEMD_COLORS\fR
+above\&.
+.RE
+.PP
+\fI$SYSTEMD_UTF8\fR
+.RS 4
+Takes a boolean argument\&. Overrides whether non\-ASCII glyphs are used in the output, e\&.g\&. the box drawing characters of
+\fBudevadm info \-\-tree\fR\&. By default, they are used unless the character set of the locale, as set by
+\fI$LC_ALL\fR,
+\fI$LC_CTYPE\fR
+or
+\fI$LANG\fR, is not UTF\-8\&.
+.RE
+.PP
+\fI$UDEV_IN_CHROOT\fR, \fI$SYSTEMD_IN_CHROOT\fR
+.RS 4
+Takes a boolean argument, and overrides the detection of a
+\fBchroot\fR(2)
+environment\&. In a chroot,
+\fBudevadm trigger\fR,
+\fBudevadm control\fR,
+\fBudevadm settle\fR
+and
+\fBudevadm monitor\fR
+do nothing: they log "Running in chroot, ignoring request\&." and succeed\&. Their options are checked first, so
+\fB\-\-help\fR,
+\fB\-\-version\fR
+and invalid options work as outside a chroot\&. By default,
+\fBudevadm\fR
+is in a chroot if its root directory is not the one of PID 1, or if
+/proc
+is not mounted\&.
+\fI$UDEV_IN_CHROOT\fR
+takes precedence over
+\fI$SYSTEMD_IN_CHROOT\fR\&.
+.RE
+.PP
+\fI$SYSTEMD_IGNORE_CHROOT\fR
+.RS 4
+Deprecated, use
+\fI$SYSTEMD_IN_CHROOT=0\fR
+instead\&. If set to true,
+\fBudevadm\fR
+does not consider itself to be in a chroot\&. It is only read when neither
+\fI$UDEV_IN_CHROOT\fR
+nor
+\fI$SYSTEMD_IN_CHROOT\fR
+is set, and a false value has no effect\&.
+.RE
+.PP
+\fI$UDEV_DEVICE_VERIFY_SYSFS\fR
+.RS 4
+Takes a boolean\&. Like systemd,
+\fBudevadm\fR,
+\fBudevd\fR
+and all programs that use libudev only take a device, e\&.g\&. given by its path below
+/sys, when it is on sysfs, and refuse e\&.g\&. paths below
+/sys/fs/cgroup\&. When this variable is false, e\&.g\&.\&
+0, this check is not done, e\&.g\&. for tests with a directory or a tmpfs as
+/sys\&. For compatibility with systemd,
+\fI$SYSTEMD_DEVICE_VERIFY_SYSFS\fR
+is used the same way when
+\fI$UDEV_DEVICE_VERIFY_SYSFS\fR
+is not set\&. Both are ignored by programs that run with elevated privileges, e\&.g\&. setuid\&.
+.RE
+.SH "INITIALIZED DEVICES"
+Initialized devices are those for which at least one udev rule already completed execution \(en for any action but
+remove
+\(em that set a property or other device setting (and thus has an entry in the udev device database)\&. Devices are no longer considered initialized if a
+remove
+action is seen for them (which removes their entry in the udev device database)\&. Note that devices that have no udev rules are never considered initialized, but might still be announced via the libudev API (or similar)\&.
+.PP
+While the udev device database has
+\fIID_PROCESSING=1\fR
+for a device, that is while
+\fBudevd\fR
+is still processing an event of the device, including its
+\fIRUN\fR
+programs, the device is not yet considered initialized by
+\fBudevadm wait\fR
+and
+\fBudevadm info \-\-wait\-for\-initialization\fR\&.
+.SH "SEE ALSO"
+\fBudev\fR(7),
+\fBudevd\fR(8)
+.SH "NOTES"
+.IP " 1." 4
+jq
+.RS 4
+\%https://jqlang.github.io/jq/manual/
+.RE
+.IP " 2." 4
+Locking Block Device Access
+.RS 4
+\%https://systemd.io/BLOCK_DEVICE_LOCKING
+.RE

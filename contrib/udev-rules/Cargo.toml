@@ -1,0 +1,19 @@
+[package]
+name = "udev-rules"
+version = "0.1.0"
+edition = "2021"
+description = "Parse and lint udev rules files: structured tokens plus semantic checks (GOTO/LABEL, operator/key compatibility, octal MODE). Zero dependencies."
+license = "MIT"
+repository = "https://github.com/Celine1337/udev-rules"
+keywords = ["udev", "systemd", "rules", "lint", "parser"]
+categories = ["parser-implementations", "development-tools"]
+
+[lib]
+name = "udev_rules"
+path = "src/lib.rs"
+
+[[bin]]
+name = "udev-rules"
+path = "src/bin/udev_rules.rs"
+
+[dependencies]

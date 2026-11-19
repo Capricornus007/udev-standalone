@@ -1,0 +1,269 @@
+/***
+  This file is part of udev.
+
+  Copyright 2012 Kay Sievers <kay@vrfy.org>
+
+  udev is free software; you can redistribute it and/or modify it
+  under the terms of the GNU Lesser General Public License as published by
+  the Free Software Foundation; either version 2.1 of the License, or
+  (at your option) any later version.
+
+  udev is distributed in the hope that it will be useful, but
+  WITHOUT ANY WARRANTY; without even the implied warranty of
+  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
+  Lesser General Public License for more details.
+
+  You should have received a copy of the GNU Lesser General Public License
+  along with systemd; If not, see <http://www.gnu.org/licenses/>.
+***/
+
+#include <stdio.h>
+#include <errno.h>
+#include <string.h>
+#include <inttypes.h>
+#include <ctype.h>
+#include <stdlib.h>
+#include <fnmatch.h>
+#include <getopt.h>
+
+#include "options.h"
+#include "udev.h"
+#include "udev-util.h"
+
+static struct udev_hwdb *hwdb;
+
+int udev_builtin_hwdb_lookup(struct udev_device *dev,
+                             const char *prefix, const char *modalias,
+                             const char *filter, enum udev_event_mode mode) {
+        struct udev_list_entry *list;
+        struct udev_list_entry *entry;
+        int n = 0;
+
+        if (!hwdb)
+                return -ENOENT;
+
+        if (prefix) {
+                _cleanup_free_ const char *lookup;
+
+                lookup = strjoin(prefix, modalias, NULL);
+                if (!lookup)
+                        return -ENOMEM;
+                list = udev_hwdb_get_properties_list_entry(hwdb, lookup, 0);
+        } else
+                list = udev_hwdb_get_properties_list_entry(hwdb, modalias, 0);
+
+        udev_list_entry_foreach(entry, list) {
+                int r;
+
+                if (filter && fnmatch(filter, udev_list_entry_get_name(entry), FNM_NOESCAPE) != 0)
+                        continue;
+
+                r = udev_builtin_add_property(dev, mode,
+                                              udev_list_entry_get_name(entry),
+                                              udev_list_entry_get_value(entry));
+                if (r == -ENOMEM)
+                        return r;
+                if (r >= 0)
+                        n++;
+        }
+        return n;
+}
+
+static const char *modalias_usb(struct udev_device *dev, char *s, size_t size) {
+        const char *n;
+        uint16_t v, p;
+
+        /* like the reference implementation, the IDs are hexadecimal numbers up to ffff, also 0000 */
+        if (device_get_sysattr_u16_full(dev, "idVendor", 16, &v) < 0)
+                return NULL;
+        if (device_get_sysattr_u16_full(dev, "idProduct", 16, &p) < 0)
+                return NULL;
+        if (device_get_sysattr_safe_string(dev, "product", &n) < 0)
+                n = NULL;
+
+        snprintf(s, size, "usb:v%04Xp%04X:%s", v, p, n ? n : "");
+        return s;
+}
+
+static int udev_builtin_hwdb_search(struct udev_device *dev, struct udev_device *srcdev,
+                                    const char *subsystem, const char *prefix,
+                                    const char *filter, enum udev_event_mode mode) {
+        struct udev_device *d;
+        char s[LINE_MAX];
+        bool last = false;
+        int r = 0;
+
+        if (!srcdev)
+                srcdev = dev;
+
+        /* Like systemd, the parents of a usb_device are skipped only after a lookup of its modalias, not when it
+         * has none. */
+        for (d = srcdev; d; d = udev_device_get_parent(d)) {
+                _cleanup_free_ char *escaped = NULL;
+                const char *dsubsys;
+                const char *modalias = NULL;
+
+                dsubsys = udev_device_get_subsystem(d);
+
+                /* look only at devices of a specific subsystem */
+                if (subsystem && !streq_ptr(dsubsys, subsystem))
+                        continue;
+
+                /* Like systemd, the MODALIAS of a device without a subsystem is read only if the device has a
+                 * device number or an interface index: sd-device reads the properties of a device together
+                 * with its database, whose name needs one of them or the subsystem, and the lookup fails
+                 * without. */
+                if (!dsubsys && major(udev_device_get_devnum(d)) == 0 && udev_device_get_ifindex(d) <= 0)
+                        continue;
+
+                modalias = udev_device_get_property_value(d, "MODALIAS");
+
+                if (streq_ptr(dsubsys, "usb") && streq_ptr(udev_device_get_devtype(d), "usb_device")) {
+                        /* if the usb_device does not have a modalias, compose one */
+                        if (!modalias)
+                                modalias = modalias_usb(d, s, sizeof(s));
+
+                        /* avoid looking at any parent device, they are usually just a USB hub */
+                        last = true;
+                }
+
+                if (!modalias)
+                        continue;
+
+                /* the property, which may be set by the rules, escaped like the values in their messages */
+                escaped = log_escape(LOG_DEBUG, modalias);
+                log_device_debug(dev, "hwdb modalias key: \"%s\"", escaped ?: modalias);
+
+                r = udev_builtin_hwdb_lookup(dev, prefix, modalias, filter, mode);
+                if (r > 0)
+                        break;
+
+                if (last)
+                        break;
+        }
+
+        return r;
+}
+
+static int builtin_hwdb(struct udev_device *dev, int argc, char *argv[], enum udev_event_mode mode) {
+        static const struct option options[] = {
+                { "filter", required_argument, NULL, 'f' },
+                { "device", required_argument, NULL, 'd' },
+                { "subsystem", required_argument, NULL, 's' },
+                { "lookup-prefix", required_argument, NULL, 'p' },
+                {}
+        };
+        const char *filter = NULL;
+        const char *device = NULL;
+        const char *subsystem = NULL;
+        const char *prefix = NULL;
+        _cleanup_udev_device_unref_ struct udev_device *srcdev = NULL;
+        int r;
+
+        /* Like systemd, the errors are returned as negative error codes, with the reason. */
+        if (!hwdb)
+                return -EINVAL;
+
+        for (;;) {
+                int option;
+
+                /* Like systemd, an invalid option fails the builtin, with the text of systemd's option
+                 * parser, e.g. "udevadm: unrecognized option '--foo'", logged at error level. */
+                option = getopt_long_log(argc, argv, "f:d:s:p:", options);
+                if (option == -1)
+                        break;
+
+                switch (option) {
+                case 'f':
+                        filter = optarg;
+                        break;
+
+                case 'd':
+                        device = optarg;
+                        break;
+
+                case 's':
+                        subsystem = optarg;
+                        break;
+
+                case 'p':
+                        prefix = optarg;
+                        break;
+
+                case '?':
+                        return -EINVAL;
+                }
+        }
+
+        /* query a specific key given as argument */
+        if (argv[optind]) {
+                r = udev_builtin_hwdb_lookup(dev, prefix, argv[optind], filter, mode);
+                if (r < 0)
+                        return log_device_debug_errno(dev, r, "Failed to look up hwdb: %m");
+                if (r == 0)
+                        return log_device_debug_errno(dev, ENODATA, "No entry found from hwdb.");
+                return EXIT_SUCCESS;
+        }
+
+        /* read data from another device than the device we will store the data */
+        if (device) {
+                errno = 0;
+                srcdev = udev_device_new_from_device_id(udev_device_get_udev(dev), device);
+                if (!srcdev) {
+                        _cleanup_free_ char *escaped = NULL;
+
+                        r = errno > 0 ? -errno : -ENODEV;
+                        /* the argument, which may come from a substitution, escaped like the values in the
+                         * messages of the rules */
+                        escaped = log_escape(LOG_DEBUG, device);
+                        return log_device_debug_errno(dev, r, "Failed to create sd_device object '%s': %m", escaped ?: device);
+                }
+        }
+
+        r = udev_builtin_hwdb_search(dev, srcdev, subsystem, prefix, filter, mode);
+        if (r < 0)
+                return log_device_debug_errno(dev, r, "Failed to look up hwdb: %m");
+        if (r == 0)
+                return log_device_debug_errno(dev, ENODATA, "No entry found from hwdb.");
+        return EXIT_SUCCESS;
+}
+
+/* called at udev startup and reload */
+static int builtin_hwdb_init(struct udev *udev) {
+        if (hwdb)
+                return 0;
+
+        /* like the reference implementation, return the reason, e.g. -ENOENT when there is no hwdb.bin; udev_hwdb_new() logged it */
+        errno = 0;
+        hwdb = udev_hwdb_new(udev);
+        if (!hwdb)
+                return errno_or_else(ENOMEM);
+
+        log_debug("Loaded hardware database.");
+        return 0;
+}
+
+/* called on udev shutdown and reload request */
+static void builtin_hwdb_exit(struct udev *udev __attribute__((unused))) {
+        hwdb = udev_hwdb_unref(hwdb);
+        log_debug("Unloaded hardware database.");
+}
+
+/* called every couple of seconds during event activity; 'true' if config has changed */
+static bool builtin_hwdb_validate(struct udev *udev __attribute__((unused))) {
+        if (udev_hwdb_validate(hwdb)) {
+                log_debug("hwdb needs reloading.");
+                return true;
+        }
+
+        return false;
+}
+
+const struct udev_builtin udev_builtin_hwdb = {
+        .name = "hwdb",
+        .cmd = builtin_hwdb,
+        .init = builtin_hwdb_init,
+        .exit = builtin_hwdb_exit,
+        .validate = builtin_hwdb_validate,
+        .help = "Hardware database",
+};

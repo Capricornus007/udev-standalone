@@ -1,7 +1,0 @@
-add@/devices/pci0000:00/0000:00:03.0/net/eth0
-ACTION=add
-DEVPATH=/devices/pci0000:00/0000:00:03.0/net/eth0
-SUBSYSTEM=net
-INTERFACE=eth0
-MAC=52:54:00:12:34:56
-DEVNAME=eth0

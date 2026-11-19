@@ -1,0 +1,533 @@
+'\" t
+.TH "UDEVD" "8" "" "eudev" "udevd"
+.\" -----------------------------------------------------------------
+.\" * Define some portability stuff
+.\" -----------------------------------------------------------------
+.\" ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+.\" http://bugs.debian.org/507673
+.\" http://lists.gnu.org/archive/html/groff/2009-02/msg00013.html
+.\" ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+.ie \n(.g .ds Aq \(aq
+.el       .ds Aq '
+.\" -----------------------------------------------------------------
+.\" * set default formatting
+.\" -----------------------------------------------------------------
+.\" disable hyphenation
+.nh
+.\" disable justification (adjust text to left margin only)
+.ad l
+.\" -----------------------------------------------------------------
+.\" * MAIN CONTENT STARTS HERE *
+.\" -----------------------------------------------------------------
+.SH "NAME"
+udevd \- Device event managing daemon
+.SH "SYNOPSIS"
+udevd
+.HP \w'\fB/sbin/udevd\fR\ 'u
+\fB/sbin/udevd\fR [\fB\-\-daemon\fR] [\fB\-\-debug\fR] [\fB\-\-ready\-notify=\fR] [\fB\-\-children\-max=\fR] [\fB\-\-exec\-delay=\fR] [\fB\-\-event\-timeout=\fR] [\fB\-\-resolve\-names=early|late|never\fR] [\fB\-\-timeout\-signal=\fR] [\fB\-\-version\fR] [\fB\-\-help\fR]
+.SH "DESCRIPTION"
+\fBudevd\fR
+listens to kernel uevents\&. For every event, udevd executes matching instructions specified in udev rules\&. See
+\fBudev\fR(7)\&.
+.PP
+The behavior of the daemon can be configured using
+\fBudev.conf\fR(5), its command\-line options, environment variables, and on the kernel command\-line, or changed dynamically with
+\fBudevadm control\fR\&.
+.PP
+On
+\fBSIGTERM\fR
+or
+\fBSIGINT\fR, or with
+\fBudevadm control \-\-exit\fR,
+\fBudevd\fR
+discards the queued events, tells its workers to exit, and waits up to 30 seconds for the events being processed\&. A worker that has not finished its event 5 seconds later is killed with
+\fBSIGKILL\fR\&.
+.SH "OPTIONS"
+
+\fB\-d\fR, \fB\-\-daemon\fR
+.RS 4
+Detach and run in the background\&. Unless the log level is
+debug, standard input, output and error are connected to
+/dev/null; then, unlike systemd, which writes them to
+/dev/null, the messages for the console, e\&.g\&. with the
+\fBconsole\fR
+log target of
+\fI$SYSTEMD_LOG_TARGET\fR
+or
+\fIsystemd\&.log_target=\fR
+on the kernel command line, are written to
+/dev/console, or, when that cannot be opened, e\&.g\&. in a container, to the kernel log buffer (/dev/kmsg)\&.
+.RE
+.PP
+\fB\-D\fR, \fB\-\-debug\fR
+.RS 4
+Print debug messages to standard error\&. The log level set with
+\fIudev\&.log_level=\fR
+on the kernel command line takes precedence over it\&.
+.RE
+.PP
+\fB\-r\fR, \fB\-\-ready\-notify=\fR
+.RS 4
+Issue (S6/dinit compatible) readiness notification via a file descriptor\&. A short message followed by a newline character will be sent via the specified file descriptor (inherited from the parent process) when initialization is complete\&.
+.RE
+.PP
+\fB\-c\fR, \fB\-\-children\-max=\fR
+.RS 4
+Limit the number of events executed in parallel\&. When it is not specified or 0, the maximum is determined based on the system resources:
+MIN(2 \(mu CPUs + 16, MAX(RAM / 128 MiB, 10), 2048), where
+CPUs
+is the number of CPUs
+\fBudevd\fR
+may run on, according to its CPU affinity, and
+RAM
+the size of the physical memory, or the memory limit of the cgroup of PID 1 when it is smaller:
+\fImemory\&.max\fR
+with cgroup v2, or
+\fImemory\&.limit_in_bytes\fR
+in the hierarchy of the memory controller with cgroup v1\&. It takes precedence over
+\fIchildren_max=\fR
+in
+\fBudev.conf\fR(5), unless it is 0\&.
+.RE
+.PP
+\fB\-e\fR, \fB\-\-exec\-delay=\fR
+.RS 4
+Delay the execution of
+\fIRUN\fR
+instructions by the given number of seconds, or by a time span with a unit, e\&.g\&.\&
+500ms\&. This option might be useful when debugging system crashes during coldplug caused by loading non\-working kernel modules\&. A delay that is not shorter than the event timeout is ignored\&. It takes precedence over
+\fIexec_delay=\fR
+in
+\fBudev.conf\fR(5), unless it is 0\&.
+.RE
+.PP
+\fB\-t\fR, \fB\-\-event\-timeout=\fR
+.RS 4
+Set the number of seconds to wait for events to finish, or a time span with a unit, e\&.g\&.\&
+5min\&. After this time the event will be terminated\&. The default is 180 seconds, which is also used when 0 or less than a millisecond is given\&. It takes precedence over
+\fIevent_timeout=\fR
+in
+\fBudev.conf\fR(5), unless it is 0\&.
+.sp
+When the timeout is reached, the worker processing the event sends the timeout signal (see
+\fB\-\-timeout\-signal=\fR) to the program of
+\fIRUN\fR,
+\fIPROGRAM\fR
+or
+\fIIMPORT{program}\fR
+that is still running\&. If the worker has not finished the event 10 seconds later,
+\fBudevd\fR
+sends the timeout signal to the worker\&. This extra time can be set with the
+\fI$UDEV_EXTRA_TIMEOUT_SEC\fR
+environment variable of
+\fBudevd\fR, or
+\fI$SYSTEMD_UDEV_EXTRA_TIMEOUT_SEC\fR
+when that is not set, to a time span of up to 5 hours, e\&.g\&.\&
+30s\&.
+.RE
+.PP
+\fB\-\-timeout\-signal=\fR
+.RS 4
+Set the signal which
+\fBudevd\fR
+will send to forked off processes after reaching event timeout\&. The setting can be overridden at boot time with the kernel command line option
+\fIudev\&.timeout_signal=\fR\&. Setting to
+\fBSIGABRT\fR
+may be helpful in order to debug worker timeouts\&. Defaults to
+\fBSIGKILL\fR\&. Note that setting the option on the command line overrides the setting from the configuration file\&. The signal is given as a number or a name, with or without the
+SIG
+prefix\&. Signals whose default action does not terminate a process, with which the timeout would not stop anything, are ignored with a warning:
+\fBSIGCHLD\fR,
+\fBSIGCONT\fR,
+\fBSIGSTOP\fR,
+\fBSIGTSTP\fR,
+\fBSIGTTIN\fR,
+\fBSIGTTOU\fR,
+\fBSIGURG\fR
+and
+\fBSIGWINCH\fR\&. A worker that has not finished its event 5 seconds after the signal, e\&.g\&. as it blocks
+\fBSIGTERM\fR
+while it processes an event, is killed with
+\fBSIGKILL\fR; after a signal whose default action dumps core, e\&.g\&.\&
+\fBSIGABRT\fR, 90 seconds, so that the core dump is not cut off\&.
+.RE
+.PP
+\fB\-N\fR, \fB\-\-resolve\-names=\fR
+.RS 4
+Specify when udevd should resolve names of users and groups\&. When set to
+\fBearly\fR
+(the default), names will be resolved when the rules are parsed\&. When set to
+\fBlate\fR, names will be resolved for every event\&. When set to
+\fBnever\fR, names will never be resolved, and the
+\fIOWNER\fR
+and
+\fIGROUP\fR
+keys whose value is not a numeric ID, i\&.e\&. a name or a value with substitutions, will be ignored; the other keys of these rules still apply\&. It takes precedence over
+\fIresolve_names=\fR
+in
+\fBudev.conf\fR(5)\&.
+.RE
+.PP
+\fB\-h\fR, \fB\-\-help\fR
+.RS 4
+Print a short help text and exit\&.
+.RE
+.PP
+\fB\-V\fR, \fB\-\-version\fR
+.RS 4
+Print a short version string and exit\&.
+.RE
+.SH "KERNEL COMMAND LINE"
+
+Parameters starting with "rd\&." will be read when
+\fBudevd\fR
+is used in an initrd, and are ignored otherwise, also by
+\fIIMPORT{cmdline}\fR
+in the rules\&. As in systemd,
+\fBudevd\fR
+considers itself running in an initrd when
+/etc/initrd\-release
+exists\&. As initrds that are not made for systemd do not provide
+/etc/initrd\-release, unlike systemd it also does so when the root file system is a memory file system (the rootfs of an initramfs, i\&.e\&. ramfs or tmpfs),
+/init
+exists, and one of the files that such initrd generators put into the initrd exists:
+/conf/initramfs\&.conf
+(initramfs\-tools),
+/lib/dracut\-lib\&.sh
+(dracut before version 019),
+/init_functions
+(old versions of mkinitcpio),
+/etc/initrd\&.defaults
+(genkernel before version 4\&.2) or
+/\&.modloop
+(mkinitfs of Alpine Linux)\&. The detection can be overridden with the
+\fI$SYSTEMD_IN_INITRD\fR
+environment variable, set to a boolean value\&.
+.PP
+In the names of the parameters, "\-" and "_" are the same, e\&.g\&.\&
+\fIudev\&.children\-max=\fR
+is the same as
+\fIudev\&.children_max=\fR\&. Like systemd,
+\fBudevd\fR
+warns about other parameters that start with
+\fIudev\&.\fR\&, e\&.g\&. misspelled ones, and, in an initrd, with
+\fIrd\&.udev\&.\fR\&, and ignores them\&.
+.PP
+\fIudev\&.log_level=\fR, \fIrd\&.udev\&.log_level=\fR
+.RS 4
+Set the log level\&.
+\fIudev\&.log_priority=\fR
+and
+\fIrd\&.udev\&.log_priority=\fR
+are accepted too\&. It takes precedence over
+\fIudev_log=\fR
+in
+\fBudev.conf\fR(5)
+and over
+\fB\-\-debug\fR, and
+\fBudevadm control \-\-log\-level=\fR
+takes precedence over it\&.
+.RE
+.PP
+\fIudev\&.trace[=\fR\fI\fIBOOL\fR\fR\fI]\fR, \fIrd\&.udev\&.trace[=\fR\fI\fIBOOL\fR\fR\fI]\fR
+.RS 4
+Enable/disable trace logging\&. When enabled,
+\fIudev\&.log_level=\fR
+will be ignored, and
+debug
+level is assumed\&.
+.RE
+.PP
+\fIudev\&.children_max=\fR, \fIrd\&.udev\&.children_max=\fR
+.RS 4
+Limit the number of events executed in parallel\&. It takes precedence over
+\fB\-\-children\-max=\fR, unless it is 0\&. See
+\fB\-\-children\-max=\fR
+for the default\&.
+.RE
+.PP
+\fIudev\&.exec_delay=\fR, \fIrd\&.udev\&.exec_delay=\fR
+.RS 4
+Delay the execution of
+\fIRUN\fR
+instructions by the given number of seconds, or by a time span with a unit, e\&.g\&.\&
+500ms\&. This option might be useful when debugging system crashes during coldplug caused by loading non\-working kernel modules\&. It takes precedence over
+\fB\-\-exec\-delay=\fR, unless it is 0\&.
+.RE
+.PP
+\fIudev\&.event_timeout=\fR, \fIrd\&.udev\&.event_timeout=\fR
+.RS 4
+Wait for events to finish up to the given number of seconds, or a time span with a unit, e\&.g\&.\&
+5min\&. This option might be useful if events are terminated due to kernel drivers taking too long to initialize\&. It takes precedence over
+\fB\-\-event\-timeout=\fR, unless it is 0\&.
+.RE
+.PP
+\fIudev\&.timeout_signal=\fR, \fIrd\&.udev\&.timeout_signal=\fR
+.RS 4
+Specifies a signal that
+\fBudevd\fR
+will send to workers on timeout\&. Note that kernel command line option overrides both the setting in the configuration file and the one on the program command line\&. As with
+\fB\-\-timeout\-signal=\fR, signals that do not terminate a process are ignored with a warning\&.
+.RE
+.PP
+\fIudev\&.blockdev_read_only[=\fR\fI\fIBOOL\fR\fR\fI]\fR, \fIrd\&.udev\&.blockdev_read_only[=\fR\fI\fIBOOL\fR\fR\fI]\fR
+.RS 4
+If specified, mark all physical block devices read\-only as they appear\&. Synthetic block devices (such as loopback block devices or device mapper devices) are left as they are\&. This is useful to guarantee that the contents of physical block devices remains unmodified during runtime, for example to implement fully stateless systems, for testing or for recovery situations where corrupted file systems shall not be corrupted further through accidental modification\&.
+.sp
+A block device may be marked writable again by issuing the
+\fBblockdev \-\-setrw\fR
+command, see
+\fBblockdev\fR(8)
+for details\&.
+.RE
+.PP
+\fInet\&.ifnames=\fR
+.RS 4
+Network interfaces are renamed to give them predictable names when possible\&. It is enabled by default; specifying 0 disables it\&. When eudev is built with
+\fB\-\-with\-net\-ifnames\-default=no\fR, it is disabled by default; specifying 1 enables it, and also the alternative names of network interfaces, which are then only assigned with 1\&. When eudev is built with
+\fB\-\-enable\-rule\-generator\fR, the rule generator keeps the names that the kernel gave the interfaces: by default,
+80\-net\-name\-slot\&.rules, which renames the interfaces, is not installed, as the rule generator replaces it, and this option changes nothing; when eudev is also built with
+\fB\-\-with\-net\-ifnames\-default=no\fR, specifying 1 enables the renaming, as without the rule generator, except for the interfaces that its rules name already, and the rule generator then records no names (see
+\fBudev\fR(7))\&.
+.RE
+.PP
+\fInet\&.naming_scheme=\fR
+.RS 4
+Selects the naming scheme, i\&.e\&. the version of the naming logic of the
+\fBnet_id\fR
+builtin, that is used to generate the predictable names of network interfaces\&. It takes the name of a scheme:
+eudev
+for the names generated by
+\fBnet_id\fR
+of eudev 3\&.2\&.15 and older, one of the schemes of systemd
+v238,
+v239,
+v240,
+v241,
+v243,
+v245,
+v247,
+v249,
+v250,
+v251,
+v252,
+v253,
+v254,
+v255,
+v257,
+v258,
+v259,
+v260
+and
+v261, or
+latest
+for the latest one, which is the default\&. The schemes are described in
+\fBudev\fR(7)\&. This option takes precedence over
+\fInet_naming_scheme=\fR
+in
+\fBudev.conf\fR(5)\&. The
+\fI$NET_NAMING_SCHEME\fR
+environment variable of
+\fBudevd\fR
+takes precedence over both, unless its value starts with
+:\&.
+.RE
+.PP
+\fIsystemd\&.log_level=\fR, \fIsystemd\&.log_target=\fR, \fIsystemd\&.log_color[=\fR\fI\fIBOOL\fR\fR\fI]\fR, \fIsystemd\&.log_location[=\fR\fI\fIBOOL\fR\fR\fI]\fR, \fIsystemd\&.log_time[=\fR\fI\fIBOOL\fR\fR\fI]\fR, \fIsystemd\&.log_tid[=\fR\fI\fIBOOL\fR\fR\fI]\fR, \fIsystemd\&.log_ratelimit_kmsg[=\fR\fI\fIBOOL\fR\fR\fI]\fR, \fIdebug\fR
+.RS 4
+Like in systemd, the same as the environment variables
+\fI$SYSTEMD_LOG_LEVEL\fR,
+\fI$SYSTEMD_LOG_TARGET\fR,
+\fI$SYSTEMD_LOG_COLOR\fR,
+\fI$SYSTEMD_LOG_LOCATION\fR,
+\fI$SYSTEMD_LOG_TIME\fR,
+\fI$SYSTEMD_LOG_TID\fR
+and
+\fI$SYSTEMD_LOG_RATELIMIT_KMSG\fR, see below, which take precedence over them\&. Like in systemd,
+\fIdebug\fR
+without a value is the same as
+\fIsystemd\&.log_level=debug\fR\&. Like systemd before version 248, every program of eudev that has no controlling terminal reads them:
+\fBudevd\fR, the programs that it runs, e\&.g\&.\&
+\fBudevadm\fR
+or helpers like
+\fBscsi_id\fR, and the commands run without a terminal, e\&.g\&. by init scripts; a command run from a terminal ignores them\&.
+.RE
+.PP
+The log level of
+\fBudevd\fR
+is taken from the following, where a later one takes precedence over the earlier ones: the default,
+info;
+\fIsystemd\&.log_level=\fR
+or
+\fIdebug\fR
+on the kernel command line;
+\fI$UDEV_LOG_LEVEL\fR
+or
+\fI$SYSTEMD_LOG_LEVEL\fR;
+\fIudev_log=\fR
+in
+\fBudev.conf\fR(5);
+\fB\-\-debug\fR;
+\fIudev\&.log_level=\fR
+on the kernel command line; and
+\fBudevadm control \-\-log\-level=\fR\&. Trace logging, with
+\fIudev\&.trace\fR
+or
+\fBudevadm control \-\-trace\fR, logs at the debug level regardless of them\&.
+.PP
+For testing, the kernel command line can be replaced by the value of the
+\fI$UDEV_PROC_CMDLINE\fR
+environment variable of
+\fBudevd\fR
+and
+\fBudevadm\fR, when it is set, even to an empty string\&. It applies to the options described here, to the
+\fInet\&.ifnames=\fR
+option used by
+80\-net\-name\-slot\&.rules
+(and by
+80\-net\-altnames\&.rules
+when eudev is built with
+\fB\-\-with\-net\-ifnames\-default=no\fR, and by
+75\-persistent\-net\-generator\&.rules
+when it is also built with
+\fB\-\-enable\-rule\-generator\fR), and to
+\fIIMPORT{cmdline}\fR
+in the rules in general, and it is handled like the kernel command line, e\&.g\&. options starting with "rd\&." are ignored outside of an initrd:
+.sp
+.if n \{\
+.RS 4
+.\}
+.nf
+UDEV_PROC_CMDLINE="net\&.naming_scheme=v250" udevadm test\-builtin net_id /sys/class/net/eth0
+UDEV_PROC_CMDLINE="net\&.ifnames=0" udevadm test /sys/class/net/eth0
+UDEV_PROC_CMDLINE="net\&.ifnames=1" udevadm test /sys/class/net/eth0
+.fi
+.if n \{\
+.RE
+.\}
+.PP
+The last two commands show what the rules do with the interface when the renaming is disabled and when it is enabled, independent of the default of
+\fInet\&.ifnames=\fR
+that eudev is built with\&. They do not run
+\fBwrite_net_rules\fR, the program of the rule generator, so they do not show a name that it would give\&.
+.PP
+For compatibility with systemd,
+\fI$SYSTEMD_PROC_CMDLINE\fR
+is used the same way when
+\fI$UDEV_PROC_CMDLINE\fR
+is not set\&.
+.SH "ENVIRONMENT"
+Each of the following settings is read from
+\fI$UDEV_LOG_\fR\fI\fINAME\fR\fR, e\&.g\&.\&
+\fI$UDEV_LOG_LEVEL\fR, and, like in systemd, from
+\fI$SYSTEMD_LOG_\fR\fI\fINAME\fR\fR, e\&.g\&.\&
+\fI$SYSTEMD_LOG_LEVEL\fR, when the former is not set\&.
+\fBudevadm\fR
+reads them too, see
+\fBudevadm\fR(8)\&.
+.PP
+\fI$UDEV_LOG_LEVEL\fR, \fI$SYSTEMD_LOG_LEVEL\fR
+.RS 4
+The maximum log level of emitted messages (messages with a higher log level, i\&.e\&. less important ones, are suppressed)\&. Takes a comma\-separated list of values\&. A value may be either one of (in order of decreasing importance)
+\fBemerg\fR,
+\fBalert\fR,
+\fBcrit\fR,
+\fBerr\fR,
+\fBwarning\fR,
+\fBnotice\fR,
+\fBinfo\fR,
+\fBdebug\fR, or an integer in the range 0\&...7, also with a
+0x,
+0o
+or
+0b
+prefix\&. See
+\fBsyslog\fR(3)
+for more information\&. Each value may optionally be prefixed with one of
+\fBconsole\fR,
+\fBsyslog\fR
+or
+\fBkmsg\fR
+followed by a colon to set the maximum log level for that specific log target (e\&.g\&.\&
+\fBSYSTEMD_LOG_LEVEL=debug,console:info\fR
+specifies to log at debug level except when logging to the console which should be at info level)\&. Note that the global maximum log level takes priority over any per target maximum log levels\&. Like in systemd, it takes precedence over
+\fIsystemd\&.log_level=\fR
+on the kernel command line, and
+\fIudev_log=\fR
+of
+\fBudev.conf\fR(5),
+\fB\-\-debug\fR,
+\fIudev\&.log_level=\fR
+on the kernel command line and
+\fBudevadm control \-\-log\-level=\fR
+take precedence over it\&.
+.RE
+.PP
+\fI$UDEV_LOG_TARGET\fR, \fI$SYSTEMD_LOG_TARGET\fR
+.RS 4
+The destination for log messages\&. One of
+\fBconsole\fR
+(log to the attached tty),
+\fBconsole\-prefixed\fR
+(log to the attached tty but with prefixes encoding the log level and "facility", see
+\fBsyslog\fR(3)),
+\fBkmsg\fR
+(log to the kernel circular log buffer),
+\fBsyslog\fR
+(log to
+/dev/log),
+\fBsyslog\-or\-kmsg\fR
+(log to
+/dev/log
+if available, and to kmsg otherwise),
+\fBauto\fR
+(log to kmsg if it can be written, and to the attached tty otherwise),
+\fBsafe\fR
+(log to kmsg if standard error is not a tty, and to the attached tty otherwise),
+\fBnull\fR
+(disable log output)\&. The default is
+\fBauto\fR;
+\fB\-\-debug\fR
+logs to the console\&.
+.RE
+.PP
+\fI$UDEV_LOG_COLOR\fR, \fI$SYSTEMD_LOG_COLOR\fR
+.RS 4
+A boolean\&. If true, messages written to the tty are colored according to their log level, like in systemd: errors and more important ones in red, warnings in yellow, notices highlighted and debug messages in grey\&. The default is true\&. Colors are used only when standard output and standard error are terminals, and
+\fI$TERM\fR
+is set and not
+dumb, and
+\fI$NO_COLOR\fR
+and
+\fI$SYSTEMD_COLORS\fR
+are used like by
+\fBudevadm\fR, see
+\fBudevadm\fR(8)\&.
+.RE
+.PP
+\fI$UDEV_LOG_LOCATION\fR, \fI$SYSTEMD_LOG_LOCATION\fR
+.RS 4
+A boolean\&. If true, messages written to the tty are prefixed with a filename and line number in the source code where the message originates\&. The filename is relative to the top of the source tree, e\&.g\&.\&
+src/udev/udevd\&.c, like in systemd\&.
+.RE
+.PP
+\fI$UDEV_LOG_TIME\fR, \fI$SYSTEMD_LOG_TIME\fR
+.RS 4
+A boolean\&. If true, messages written to the tty are prefixed with the local time, e\&.g\&.\&
+Mon 2026\-10\-05 12:34:56 EEST, like in systemd\&.
+.RE
+.PP
+\fI$UDEV_LOG_TID\fR, \fI$SYSTEMD_LOG_TID\fR
+.RS 4
+A boolean\&. If true, messages written to the tty are prefixed with the numerical thread ID (TID) in parentheses, like in systemd\&.
+.RE
+.PP
+\fI$UDEV_LOG_RATELIMIT_KMSG\fR, \fI$SYSTEMD_LOG_RATELIMIT_KMSG\fR
+.RS 4
+A boolean, true by default\&. If true, like in systemd, at most 200 messages in 5 seconds are written to the kernel log buffer by each process; the first message that is dropped is replaced by
+Too many messages being logged to kmsg, ignoring\&. If false, the messages written to kmsg are not rate limited\&.
+.RE
+.SH "SEE ALSO"
+\fBudev.conf\fR(5),
+\fBudev\fR(7),
+\fBudevadm\fR(8)

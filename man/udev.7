@@ -1,0 +1,1825 @@
+'\" t
+.TH "UDEV" "7" "" "udev" "udev"
+.\" -----------------------------------------------------------------
+.\" * Define some portability stuff
+.\" -----------------------------------------------------------------
+.\" ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+.\" http://bugs.debian.org/507673
+.\" http://lists.gnu.org/archive/html/groff/2009-02/msg00013.html
+.\" ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+.ie \n(.g .ds Aq \(aq
+.el       .ds Aq '
+.\" -----------------------------------------------------------------
+.\" * set default formatting
+.\" -----------------------------------------------------------------
+.\" disable hyphenation
+.nh
+.\" disable justification (adjust text to left margin only)
+.ad l
+.\" -----------------------------------------------------------------
+.\" * MAIN CONTENT STARTS HERE *
+.\" -----------------------------------------------------------------
+.SH "NAME"
+udev \- Dynamic device management
+.SH "DESCRIPTION"
+udev supplies the system software with device events, manages permissions of device nodes, may create additional symlinks in the
+/dev
+directory and may rename network interfaces\&. The kernel usually just assigns unpredictable device names based on the order of discovery\&. Meaningful symlinks or network device names provide a way to reliably identify devices based on their properties or current configuration\&.
+.PP
+The udev daemon,
+\fBudevd\fR(8), receives device uevents directly from the kernel whenever a device is added or removed from the system, or it changes its state\&. When udev receives a device event, it matches its configured set of rules against various device attributes to identify the device\&. Rules that match may provide additional device information to be stored in the udev database or to be used to create meaningful symlink names\&.
+.PP
+All device information udev processes is stored in the udev database and sent out to possible event subscribers\&. Access to all stored data and the event sources is provided by the library libudev\&.
+.PP
+\fBudevd\fR
+processes an event only after the earlier events of the same device, of its parent devices and of its children have finished, but the events of other devices, also of its siblings, in parallel\&. So an event that the kernel sends last need not finish last\&. For example, the kernel creates the control device of a sound card (controlC\fIN\fR) after all other devices of the card, but the events of other children of the card may still be in progress when the event of the control device has finished\&. Therefore
+78\-sound\-card\&.rules
+triggers a
+change
+event of the card from the event of its control device: as the event of their parent, it starts only after all earlier events of the card\*(Aqs children, and it sets
+\fISOUND_INITIALIZED=1\fR; this event is the point at which the card is ready\&.
+\fBudevadm trigger \-\-settle\fR
+does not wait for it, as it waits only for the events that it triggered itself, not for events that rules trigger in response\&. And
+\fBudevadm trigger\fR
+with its default action
+change
+triggers the card itself too: its own
+change
+event runs first, before the events of its children of the same call, and also sets
+\fISOUND_INITIALIZED=1\fR, and the event triggered by its control device follows, so the card gets two such events\&. See
+\fBudevadm\fR(8)\&.
+.SH "RULES FILES"
+The udev rules are read from the files located in the system rules directories
+/lib/udev/rules\&.d
+(additionally
+/usr/lib/udev/rules\&.d
+when built with
+\fB\-\-enable\-split\-usr\fR) and
+/usr/local/lib/udev/rules\&.d, the volatile runtime directory
+/run/udev/rules\&.d
+and the local administration directory
+/etc/udev/rules\&.d\&. All rules files are collectively sorted and processed in lexical order, regardless of the directories in which they live\&. However, files with identical filenames replace each other\&. Files in
+/etc
+have the highest priority, files in
+/run
+take precedence over files with the same name in
+/usr/local/lib, and these over files with the same name in
+/lib
+(or
+/usr/lib)\&. This can be used to override a system\-supplied rules file with a local file if needed; a symlink in
+/etc
+with the same name as a rules file in
+/lib, pointing to
+/dev/null, or an empty file with that name, disables the rules file entirely\&. Rule files must have the extension
+\&.rules; other extensions are ignored\&.
+.PP
+Every line in the rules file contains at least one key\-value pair\&. Except for empty lines or lines beginning with
+#, which are ignored\&. There are two kinds of keys: match and assignment\&. If all match keys match against their values, the rule gets applied and the assignment keys get the specified values assigned\&.
+.PP
+A line that ends with a backslash (\e) is continued on the next line: the backslash is removed, and the next line is appended without its leading whitespace\&. Lines beginning with
+#
+are ignored also between the lines of a continued rule\&. A rule that is still continued at the end of the file, or that is longer than 16383 characters, is ignored with an error message; the other rules of the file are still read\&. The messages about a rule name the rules file and the first line of the rule\&.
+.PP
+A matching rule may rename a network interface, add symlinks pointing to the device node, or run a specified program as part of the event handling\&. Like in systemd,
+\fINAME\fR
+is ignored with a warning for a device that is not a network interface, also for one with a device node, and
+\fISYMLINK\fR
+is ignored for a device without a device node; the other keys of the rule line still apply\&.
+\fIOWNER\fR,
+\fIGROUP\fR
+and
+\fIMODE\fR
+have no effect on such a device\&.
+.PP
+Like in systemd, a rule line is not evaluated at all when it cannot do anything for the event: when it has no assignment,
+\fIGOTO\fR
+(with its
+\fILABEL\fR),
+\fIPROGRAM\fR
+or
+\fIIMPORT\fR
+key, or when its only assignments are
+\fINAME\fR, and the device is not a network interface, or
+\fISYMLINK\fR,
+\fIOWNER\fR,
+\fIGROUP\fR
+or
+\fIMODE\fR, and the device has no device node, or only any of these keys on a remove event\&. Its match keys are not evaluated then, so their errors that otherwise stop the processing of the event, e\&.g\&. of
+\fITEST\fR
+or
+\fISYSCTL{}\fR, do not happen, and
+\fBudevadm test\fR
+does not show the line\&.
+\fBudevadm verify\fR
+reports a rule line that has none of these keys as having no effect\&.
+.PP
+A rule consists of a comma\-separated list of one or more key\-value pairs\&. Each key has a distinct operation, depending on the used operator\&. Some keys take an attribute in braces right after the key name, like
+\fIATTR{\fR\fI\fIfilename\fR\fR\fI}\fR; the attribute may contain any character except
+}, also whitespace\&. A rule line with a key\-value pair that cannot be parsed, e\&.g\&. with a value that is not quoted, or with an unknown key, an attribute or an operator the key does not take, a missing or empty attribute, an unknown built\-in command, or an unknown type of
+\fIIMPORT{}\fR
+or
+\fIRUN{}\fR, is ignored as a whole, and an error message says so\&. Valid operators are:
+.PP
+==
+.RS 4
+Compare for equality\&.
+.RE
+.PP
+!=
+.RS 4
+Compare for inequality\&.
+.RE
+.PP
+=
+.RS 4
+Assign a value to a key\&. Keys that represent a list are reset and only this single value is assigned\&.
+.RE
+.PP
++=
+.RS 4
+Add the value to a key that holds a list of entries\&.
+.RE
+.PP
+\-=
+.RS 4
+Remove the value from a key that holds a list of entries\&.
+.RE
+.PP
+:=
+.RS 4
+Assign a value to a key finally; disallow any later changes\&.
+.RE
+.PP
+Values are written as double quoted strings, such as ("string")\&. To include a quotation mark (") in the value, precede it by a backslash (\e")\&. Any other occurrences of a backslash followed by a character are not unescaped\&. That is, "\et\en" is treated as four characters: backslash, lowercase t, backslash, lowercase n\&.
+.PP
+The string can be prefixed with a lowercase e (e"string\en") to mark the string as C\-style escaped, see
+\m[blue]\fBEscape sequences in C\fR\m[]\&\s-2\u[1]\d\s+2\&. For example, e"string\en" is parsed as 7 characters: 6 lowercase letters and a newline\&. This can be useful for writing special characters when a kernel driver requires them\&.
+.PP
+The string can be prefixed with a lowercase i (i"string") to mark that the string or pattern will match case\-insensitively\&. For example, i"foo" will match
+foo,
+FOO,
+FoO
+and so on\&. The prefix can be used only for match (==) or unmatch (!=) rules, e\&.g\&.\&
+\fIATTR{foo}==i"abcd"\fR\&.
+.PP
+Please note that
+\fBNUL\fR
+is not allowed in either string variant\&.
+.PP
+The keys of a rule line are not evaluated in the order in which they are written, but, like in systemd, in a fixed order by their kind: all match keys before all assignment keys, and within these as listed below\&. Keys of the same kind are evaluated in the order in which they are written, and the evaluation stops at the first match key that does not match\&. So a key cannot use the result of a key of the same line that comes later in this order: e\&.g\&. an
+\fIENV{}\fR
+match does not see the properties that an
+\fIIMPORT\fR
+of the same line imports, and
+OWNER="$env{X}"
+or
+TAG+="$env{X}"
+does not see the value that
+ENV{X}=
+of the same line assigns; such keys must be written on separate lines\&. The order is:
+.sp
+.RS 4
+.ie n \{\
+\h'-04' 1.\h'+01'\c
+.\}
+.el \{\
+.sp -1
+.IP "  1." 4.2
+.\}
+\fIACTION\fR,
+\fIDEVPATH\fR,
+\fIKERNEL\fR,
+\fISYMLINK\fR,
+\fINAME\fR,
+\fIENV{}\fR,
+\fITAG\fR,
+\fISUBSYSTEM\fR,
+\fIDRIVER\fR,
+\fIATTR{}\fR
+and
+\fISYSCTL{}\fR
+as match keys;
+.RE
+.sp
+.RS 4
+.ie n \{\
+\h'-04' 2.\h'+01'\c
+.\}
+.el \{\
+.sp -1
+.IP "  2." 4.2
+.\}
+\fIKERNELS\fR,
+\fISUBSYSTEMS\fR,
+\fIDRIVERS\fR,
+\fIATTRS{}\fR
+and
+\fITAGS\fR, which are checked together, against the device and then against one parent device after the other;
+.RE
+.sp
+.RS 4
+.ie n \{\
+\h'-04' 3.\h'+01'\c
+.\}
+.el \{\
+.sp -1
+.IP "  3." 4.2
+.\}
+\fITEST\fR,
+\fIPROGRAM\fR,
+\fIIMPORT{file}\fR,
+\fIIMPORT{program}\fR,
+\fIIMPORT{builtin}\fR
+(also an
+\fIIMPORT{program}\fR
+that names a built\-in command),
+\fIIMPORT{db}\fR,
+\fIIMPORT{cmdline}\fR,
+\fIIMPORT{parent}\fR
+and
+\fIRESULT\fR;
+.RE
+.sp
+.RS 4
+.ie n \{\
+\h'-04' 4.\h'+01'\c
+.\}
+.el \{\
+.sp -1
+.IP "  4." 4.2
+.\}
+the
+\fIOPTIONS\fR
+\fBdump\fR
+and
+\fBdump\-json\fR,
+\fBstring_escape=none\fR,
+\fBstring_escape=replace\fR,
+\fBdb_persist\fR,
+\fBnet_altnames\fR,
+\fBwatch\fR
+and
+\fBnowatch\fR,
+\fBlink_priority=\fR
+and
+\fBlog_level=\fR;
+.RE
+.sp
+.RS 4
+.ie n \{\
+\h'-04' 5.\h'+01'\c
+.\}
+.el \{\
+.sp -1
+.IP "  5." 4.2
+.\}
+\fIOWNER\fR,
+\fIGROUP\fR
+and
+\fIMODE\fR, first the ones whose value is resolved only when the rule is applied (see below), then the others;
+.RE
+.sp
+.RS 4
+.ie n \{\
+\h'-04' 6.\h'+01'\c
+.\}
+.el \{\
+.sp -1
+.IP "  6." 4.2
+.\}
+\fITAG\fR,
+\fISECLABEL{}\fR,
+\fIENV{}\fR,
+\fINAME\fR,
+\fISYMLINK\fR,
+\fIATTR{}\fR
+and
+\fISYSCTL{}\fR
+as assignment keys;
+.RE
+.sp
+.RS 4
+.ie n \{\
+\h'-04' 7.\h'+01'\c
+.\}
+.el \{\
+.sp -1
+.IP "  7." 4.2
+.\}
+\fIRUN{builtin}\fR, then
+\fIRUN{program}\fR;
+.RE
+.sp
+.RS 4
+.ie n \{\
+\h'-04' 8.\h'+01'\c
+.\}
+.el \{\
+.sp -1
+.IP "  8." 4.2
+.\}
+\fIGOTO\fR\&.
+.RE
+.PP
+Rules written for systemd\-udevd may use features which udev does not provide: the
+\fICONST{arch}\fR,
+\fICONST{virt}\fR
+and
+\fICONST{cvm}\fR
+match keys, and the
+dissect_image,
+net_setup_link
+and
+uaccess
+built\-in commands\&. A rule line using one of them is ignored as a whole, with an error message saying so\&.
+.PP
+The following key names can be used to match against device properties\&. Some of the keys also match against properties of the parent devices in sysfs, not only the device that has generated the event\&. If multiple keys that match a parent device are specified in a single rule, all these keys must match at one and the same parent device\&.
+.PP
+\fIACTION\fR
+.RS 4
+Match the name of the event action\&.
+.RE
+.PP
+\fIDEVPATH\fR
+.RS 4
+Match the devpath of the event device\&.
+.RE
+.PP
+\fIKERNEL\fR
+.RS 4
+Match the name of the event device\&.
+.RE
+.PP
+\fINAME\fR
+.RS 4
+Match the name of a network interface\&. It can be used once the NAME key has been set in one of the preceding rules\&.
+.RE
+.PP
+\fISYMLINK\fR
+.RS 4
+Match the name of a symlink targeting the node\&. It can be used once a SYMLINK key has been set in one of the preceding rules\&. There may be multiple symlinks; only one needs to match\&. If the operator is
+!=, the token returns true only if there is no symlink matched\&.
+.RE
+.PP
+\fISUBSYSTEM\fR
+.RS 4
+Match the subsystem of the event device\&.
+.RE
+.PP
+\fIDRIVER\fR
+.RS 4
+Match the driver name of the event device\&. Only set this key for devices which are bound to a driver at the time the event is generated\&.
+.RE
+.PP
+\fIATTR{\fR\fI\fIfilename\fR\fR\fI}\fR, \fISYSCTL{\fR\fI\fIkernel parameter\fR\fR\fI}\fR
+.RS 4
+Match sysfs attribute values of the event device\&. Trailing whitespace in the attribute values is ignored unless the specified match value itself contains trailing whitespace\&.
+Match a kernel parameter value\&. Like in systemd, the whitespace around the value is removed, and a kernel parameter that does not exist has an empty value\&. Like in systemd, a kernel parameter that cannot be read, or whose name contains
+\&.\&.\&, stops the processing of the rules for the event; unlike systemd, which waits for it, this includes one that is not a regular file, e\&.g\&. a FIFO\&.
+.RE
+.PP
+\fIKERNELS\fR
+.RS 4
+Search the devpath upwards for a matching device name\&.
+.RE
+.PP
+\fISUBSYSTEMS\fR
+.RS 4
+Search the devpath upwards for a matching device subsystem name\&.
+.RE
+.PP
+\fIDRIVERS\fR
+.RS 4
+Search the devpath upwards for a matching device driver name\&.
+.RE
+.PP
+\fIATTRS{\fR\fI\fIfilename\fR\fR\fI}\fR
+.RS 4
+Search the devpath upwards for a device with matching sysfs attribute values\&. If multiple
+\fIATTRS\fR
+matches are specified, all of them must match on the same device\&. Trailing whitespace in the attribute values is ignored unless the specified match value itself contains trailing whitespace\&.
+.RE
+.PP
+\fITAGS\fR
+.RS 4
+Search the devpath upwards for a device with matching tag\&. If the operator is
+!=, the token returns true only if there is no tag matched\&. The current tags of the devices are matched, see
+\fITAG\fR
+below; for a device whose database entry was written by an older version of udev, which did not keep the tags of earlier events, all its tags\&.
+.RE
+.PP
+\fIENV{\fR\fI\fIkey\fR\fR\fI}\fR
+.RS 4
+Match against a device property value\&. When the device does not have the property, the global property set with
+\fBudevadm control \-\-property\fR
+is matched, if there is one\&.
+.sp
+The synthetic events that
+\fBudevadm trigger\fR
+and
+\fBudevd\fR
+trigger carry a random UUID in
+SYNTH_UUID=, and the process ID, the program name and the time of the program that triggered them in
+SYNTH_ARG_PID=,
+SYNTH_ARG_Comm=,
+SYNTH_ARG_TimestampRealtime=,
+SYNTH_ARG_TimestampMonotonic=
+and
+SYNTH_ARG_TimestampBoottime=
+(with Linux 4\&.13 or newer; note the mixed\-case names), which can be matched here, e\&.g\&.\&
+ENV{SYNTH_ARG_Comm}=="udevadm"\&. Like the other properties that come with the event from the kernel, they are not stored in the udev database\&. See
+\fBudevadm\fR(8)
+for details\&. The arguments, and then the UUID, are left out of an event that would not fit into the buffer of the kernel with them, as counted from the
+uevent
+file of the device, or for a power supply before Linux 5\&.8 from its attribute files; the files of power supplies and of remote control receivers are not read, and on the kernel series 4\&.19, 5\&.4, 5\&.10, 5\&.15, 6\&.1, 6\&.6 and 6\&.9 to 6\&.14, whose
+uevent
+files may wait for a driver, none is read, and only a power supply is counted\&. An event that does not fit nevertheless is triggered again without the arguments, and then without the UUID, also on the kernels that do not report that, Linux 4\&.13 to 4\&.20 before the stable releases 4\&.14\&.99, 4\&.19\&.21 and 4\&.20\&.8, as described there for
+\fBudevadm trigger\fR\&.
+.RE
+.PP
+\fITAG\fR
+.RS 4
+Match against one of device tags\&. It can be used once a TAG key has been set in one of the preceding rules\&. There may be multiple tags; only one needs to match\&. If the operator is
+!=, the token returns true only if there is no tag matched\&. Only the current tags, those assigned while processing this event, are matched, not the tags which remain from earlier events\&.
+.RE
+.PP
+\fITEST{\fR\fI\fIoctal mode mask\fR\fR\fI}\fR
+.RS 4
+Test the existence of a file\&. An octal mode mask can be specified if needed; then the file must also have at least one of the bits of the mask set in its mode, e\&.g\&.\&
+TEST{0111}
+is true for a file that anyone may execute\&. A mode mask that is zero, or that is not an octal number of at most
+7777, is an error, and the rule line is ignored\&.
+.RE
+.PP
+\fIPROGRAM\fR
+.RS 4
+Execute a program to determine whether there is a match; the key is true if the program returns successfully\&. The device properties are made available to the executed program in the environment\&. The program\*(Aqs standard output is available in the
+\fIRESULT\fR
+key\&.
+.sp
+This can only be used for very short\-running foreground tasks\&. For details, see
+\fIRUN\fR\&.
+.RE
+.PP
+\fIRESULT\fR
+.RS 4
+Match the returned string of the last
+\fIPROGRAM\fR
+call\&. This key can be used in the same or in any later rule after a
+\fIPROGRAM\fR
+call\&.
+.RE
+.PP
+Most of the fields support shell glob pattern matching and alternate patterns\&. The following special characters are supported:
+.PP
+*
+.RS 4
+Matches zero or more characters\&.
+.RE
+.PP
+?\&
+.RS 4
+Matches any single character\&.
+.RE
+.PP
+[]
+.RS 4
+Matches any single character specified within the brackets\&. For example, the pattern string
+tty[SR]
+would match either
+ttyS
+or
+ttyR\&. Ranges are also supported via the
+\-
+character\&. For example, to match on the range of all digits, the pattern
+[0\-9]
+could be used\&. If the first character following the
+[
+is a
+!\&, any characters not enclosed are matched\&.
+.RE
+.PP
+|
+.RS 4
+Separates alternative patterns\&. For example, the pattern string
+abc|x*
+would match either
+abc
+or
+x*\&.
+.RE
+.PP
+The following keys can get values assigned:
+.PP
+\fINAME\fR
+.RS 4
+The name to use for a network interface\&. The name of a device node cannot be changed by udev, only additional symlinks can be created\&.
+NAME="%k", which has no effect, and
+NAME=""
+are errors, and the rule line is ignored\&.
+.sp
+As in systemd, a network interface name is valid if it has 1 to 15 printable ASCII characters other than space,
+:,
+/
+and
+%, is not only digits, is not an interface index written in another way, i\&.e\&. a number from 1 to 2147483647 with a
+0x,
+0o
+or
+0b
+prefix or a
++
+sign, e\&.g\&.\&
+0x10
+or
++5, and is not
+\&.\&,
+\&.\&.\&,
+all
+or
+default\&. With the naming schemes
+v249
+and later (see
+the section called \(lqNETWORK INTERFACE NAMING\(rq), all other characters are replaced by
+_, and a name that is still not valid is ignored with a warning\&. With the older schemes, only the characters that are not allowed in symlink names (see
+\fISYMLINK\fR) are replaced, and renaming the interface to an invalid name fails\&. No characters are replaced with
+\fIOPTIONS+="string_escape=none"\fR\&.
+.sp
+When another interface has the name, renaming the interface fails, and it keeps its name, unless eudev is built with
+\fB\-\-enable\-rule\-generator\fR: then
+\fBudevd\fR
+waits for the name to become free (see
+the section called \(lqThe rule generator\(rq)\&.
+.RE
+.PP
+\fISYMLINK\fR
+.RS 4
+The name of a symlink targeting the node\&. Every matching rule adds this value to the list of symlinks to be created\&. With the
+\-=
+operator, the specified symlinks are removed from that list again, which allows suppressing symlinks added by earlier rules\&.
+.sp
+The set of characters to name a symlink is limited\&. Allowed characters are
+0\-9A\-Za\-z#+\-\&.:=@_/, valid UTF\-8 character sequences, and
+\ex00
+hex encoding\&. All other characters are replaced by a
+_
+character\&.
+.sp
+The name is taken relative to
+/dev/, and may also be given as an absolute path below
+/dev/\&. It is normalized: redundant slashes,
+\&.\&
+components and trailing slashes are removed, e\&.g\&.\&
+disk//by\-foo/\&./bar/
+results in
+/dev/disk/by\-foo/bar\&. A name with a
+\&.\&.\&
+component or with a component longer than 255 bytes, a name with control characters, which are only kept with
+\fIOPTIONS+="string_escape=none"\fR, an absolute path outside of
+/dev/, and a name that refers to
+/dev/
+itself are refused with an error message\&. The symlinks recorded in the udev database of a device are normalized and checked in the same way\&. A symlink is not created, and a warning is logged, where a file or directory that is not a symlink exists\&.
+.sp
+Multiple symlinks may be specified by separating the names by the space character\&. In case multiple devices claim the same name, the link always points to the device with the highest link_priority\&. If the current device goes away, the links are re\-evaluated and the device with the next highest link_priority becomes the owner of the link\&. If no link_priority is specified, the order of the devices (and which one of them owns the link) is undefined\&.
+.sp
+Symlink names must never conflict with the kernel\*(Aqs default device node names, as that would result in unpredictable behavior\&.
+.sp
+On a remove event, the symlinks recorded in the udev database of the device are removed, together with the ones the rules add for the event\&. Unlike in systemd, a
+\fISYMLINK=\fR
+or
+\fISYMLINK\-=\fR
+in a rule line that is evaluated on a remove event does not keep any of them, which would leave dangling symlinks behind\&.
+.RE
+.PP
+\fIOWNER\fR, \fIGROUP\fR, \fIMODE\fR
+.RS 4
+The permissions for the device node\&. Every specified value overrides the compiled\-in default value\&.
+.sp
+Users and groups are resolved like systemd does it, with the user and group database: a number must be a valid user or group ID, in decimal without leading zeros, and is looked up as ID, anything else must be a valid name\&. If the database does not have them, the ID 0 and the name
+root, the ID 65534 and the name of the nobody user or group (set when eudev is built with
+\fB\-\-with\-nobody\-user\fR
+and
+\fB\-\-with\-nobody\-group\fR, by default
+nobody; Debian, for example, calls the group
+nogroup), unless one of the files
+/etc/systemd/dont\-synthesize\-nobody
+(like in systemd) and
+/etc/udev/dont\-synthesize\-nobody
+exists, the IDs of system users and groups (up to
+\fISYS_UID_MAX\fR
+and
+\fISYS_GID_MAX\fR
+of
+/etc/login\&.defs, which every process reads once, like systemd built with its compat\-mutable\-uid\-boundaries option; for the ones that the file does not set, up to the ones set when eudev is built with
+\fB\-\-with\-system\-uid\-max\fR
+and
+\fB\-\-with\-system\-gid\-max\fR, by default
+\fISYS_UID_MAX\fR
+and
+\fISYS_GID_MAX\fR
+of
+/etc/login\&.defs
+of the build system, or 999), and the IDs and names (foreign\-\fIN\fR) of the range of foreign users and groups of systemd (65536 IDs from the one set when eudev is built with
+\fB\-\-with\-foreign\-uid\-base\fR, by default
+0x7FFE0000) are taken as they are\&. Like systemd, a warning is logged for a user or group that is not a system account, as device nodes owned by other accounts are deprecated\&.
+.sp
+A number, and a name without substitutions, unless
+\fBudevd\fR
+is started with
+\fB\-\-resolve\-names=late\fR
+or
+\fBnever\fR, is resolved when the rules are read\&. If the user or group does not exist, an error is logged, and only this key is ignored: the rest of the rule line, e\&.g\&.\&
+\fIMODE\fR
+or
+\fISYMLINK\fR, still applies, also with
+\fBstatic_node=\fR\&. Unlike systemd, which ignores the whole rule line then, the rules keep working on a system that lacks a group they use\&. The same applies if
+\fIOWNER\fR
+or
+\fIGROUP\fR
+is empty, or not a valid user or group name or ID, e\&.g\&. a number with leading zeros: an error is logged, and only this key is ignored\&. The other values are resolved whenever the rule is applied; if that fails, an error is logged, and the owner or group is left as it is\&. With
+\fB\-\-resolve\-names=never\fR, they are ignored\&.
+.sp
+A
+\fIMODE\fR
+must be an octal number of at most
+7777\&. A value without substitutions that is not valid, also an empty one, is an error when the rules are read, and only this key is ignored, like for an unknown user or group: the rest of the rule line still applies\&. A value with substitutions that is not valid after the substitutions fails with an error message whenever the rule is applied, and the mode is left as it is; with
+:=, it is still made final, like in systemd\&.
+.RE
+.PP
+\fISECLABEL{\fR\fI\fImodule\fR\fR\fI}\fR
+.RS 4
+Applies the specified Linux Security Module label to the device node\&. The modules are
+selinux
+and
+smack\&. SMACK labels are only applied when eudev is built with
+\fB\-\-enable\-smack\fR
+and the kernel uses SMACK\&.
+.RE
+.PP
+\fIATTR{\fR\fI\fIkey\fR\fR\fI}\fR
+.RS 4
+The value that should be written to a sysfs attribute of the event device\&. Unlike systemd, which waits for a reader, a FIFO or a socket is not written, and the assignment fails; the attribute is written without waiting\&.
+.RE
+.PP
+\fISYSCTL{\fR\fI\fIkernel parameter\fR\fR\fI}\fR
+.RS 4
+The value that should be written to kernel parameter\&. Like in systemd, a kernel parameter whose name contains
+\&.\&.\&
+is not written\&. Unlike systemd, which waits for a reader, only a regular file is written, without waiting, e\&.g\&. not a FIFO; the assignment fails otherwise\&.
+.RE
+.PP
+\fIENV{\fR\fI\fIkey\fR\fR\fI}\fR
+.RS 4
+Set a device property value\&. Property names with a leading
+\&.\&
+are not stored in the database\&. Like all other properties, they are passed in the environment of the programs run by
+\fIRUN\fR,
+\fIPROGRAM\fR
+and
+\fIIMPORT{program}\fR, and are sent with the event to the event listeners\&.
+.sp
+A property name may only contain ASCII letters, digits,
+_
+and
+\&.\&, and a value must be valid UTF\-8 without control characters, like newlines or tabs\&. Other properties are refused: an assignment or an
+\fIIMPORT\fR
+logs a warning and the rest of the rule is still applied, and invalid properties set by built\-in commands or received with the kernel event are ignored\&. Assigning an empty value, also as the result of substitutions, removes the property\&.
+.sp
+The properties that udev sets itself cannot be assigned:
+ACTION,
+SEQNUM,
+SYNTH_UUID,
+DEVPATH,
+DEVPATH_OLD,
+SUBSYSTEM,
+DEVTYPE,
+DRIVER,
+MODALIAS,
+DEVNAME,
+DEVMODE,
+DEVUID,
+DEVGID,
+MAJOR,
+MINOR,
+DISKSEQ,
+PARTN,
+IFINDEX,
+INTERFACE,
+INTERFACE_OLD,
+DEVLINKS,
+TAGS,
+CURRENT_TAGS,
+USEC_INITIALIZED,
+UDEV_DATABASE_VERSION, and names starting with
+SYNTH_ARG_\&. A rule line assigning one of them is invalid, and is ignored as a whole\&.
+\fIIMPORT\fR
+and the
+hwdb
+built\-in command do not set them either, see below\&.
+.RE
+.PP
+\fITAG\fR
+.RS 4
+Attach a tag to a device\&. This is used to filter events for users of libudev\*(Aqs monitor functionality, or to enumerate a group of tagged devices\&. The implementation can only work efficiently if only a few tags are attached to a device\&. It is only meant to be used in contexts with specific device filter requirements, and not as a general\-purpose flag\&. Excessive use might result in inefficient event handling\&.
+.sp
+Tags are "sticky": a tag attached by one event stays attached to the device, in the
+\fITAGS\fR
+property and in the index of tagged devices, until the device is removed, so that programs filtering events by tag also see the events of the device after the tag is no longer assigned\&. The tags assigned while processing the most recent event are the current tags, in the
+\fICURRENT_TAGS\fR
+property\&.
+.sp
+A tag name may only contain ASCII letters, digits,
+\-
+and
+_; other names, also an empty one, are ignored with a warning, like in systemd\&.
++=
+attaches the tag\&.
+\-=
+removes it from the current tags only\&.
+=
+and
+:=
+first clear the current tags, and drop the tags attached earlier while processing this event, and then attach the tag;
+\fITAG\fR=""
+only clears them, with the warning about the empty name\&.
+.RE
+.PP
+\fIRUN{\fR\fI\fItype\fR\fR\fI}\fR
+.RS 4
+Add a program to the list of programs to be executed after processing all the rules for a specific event, depending on
+type:
+.PP
+program
+.RS 4
+Execute an external program specified as the assigned value\&. If no absolute path is given, the program is expected to live in
+/lib/udev, otherwise, the absolute path must be specified\&.
+.sp
+This is the default if no
+\fItype\fR
+is specified\&.
+.RE
+.PP
+builtin
+.RS 4
+As
+\fIprogram\fR, but use one of the built\-in programs rather than an external one\&.
+.RE
+.sp
+The program name or the name of a builtin, and its arguments are separated by any whitespace\&. Single and double quotes, also in the middle of an argument, group characters including whitespace and are removed, e\&.g\&.\&
+a"b c"d
+is the single argument
+ab cd; a missing closing quote is accepted\&. Backslashes have no special meaning\&. This applies to
+\fIPROGRAM\fR
+and
+\fIIMPORT{program}\fR
+as well\&.
+.sp
+This can only be used for very short\-running foreground tasks\&. Running an event process for a long period of time may block all further events for this or a dependent device\&.
+.sp
+Starting daemons or other long\-running processes is not appropriate for udev; the forked processes, detached or not, will be unconditionally killed after the event handling has finished\&.
+.RE
+.PP
+\fILABEL\fR
+.RS 4
+A named label to which a
+\fIGOTO\fR
+may jump\&.
+.RE
+.PP
+\fIGOTO\fR
+.RS 4
+Jumps to the next
+\fILABEL\fR
+with a matching name\&. Like in systemd, only the first
+\fIGOTO\fR
+of a rule counts; the later ones are ignored with a warning\&.
+.RE
+.PP
+\fIIMPORT{\fR\fI\fItype\fR\fR\fI}\fR
+.RS 4
+Import a set of variables as device properties, depending on
+type:
+.PP
+program
+.RS 4
+Execute an external program specified as the assigned value and import its output, which must be in environment key format\&. Path specification, command/argument separation, and quoting work like in
+\fIRUN\fR\&.
+.RE
+.PP
+builtin
+.RS 4
+Similar to
+program, but use one of the built\-in programs rather than an external one\&.
+.RE
+.PP
+file
+.RS 4
+Import a text file specified as the assigned value, the content of which must be in environment key format\&. A line may be up to 1 MiB long; a longer line stops the import, and the key is false, while the properties imported before it are kept\&. Like in systemd, a character device is read too, e\&.g\&.\&
+/dev/null
+is imported as empty\&. Unlike systemd, which waits for a writer and for data, the file is read without waiting: a FIFO or a socket is not read, and a file without data, e\&.g\&. a terminal, fails to be read; the key is false then\&.
+.RE
+.PP
+db
+.RS 4
+Import a single property specified as the assigned value from the current device database\&. Besides the properties stored there by an earlier event, this finds the properties of the current event, such as
+\fIPRODUCT\fR
+of a USB device, even when the database has no entry for the device yet; when both have the property, the value of the database is imported\&. A property that cannot be set, e\&.g\&.\&
+\fIDEVNAME\fR
+or
+\fIACTION\fR, is not imported, see below\&.
+.RE
+.PP
+cmdline
+.RS 4
+Import a single property from the kernel command line\&. For simple flags the value of the property is set to
+1\&. Options starting with
+rd\&.\&
+are only imported in an initrd, see
+\fBudevd\fR(8); the prefix is part of the key, i\&.e\&.\&
+IMPORT{cmdline}="foo"
+does not import
+rd\&.foo\&. For testing, the kernel command line can be replaced with the
+\fI$UDEV_PROC_CMDLINE\fR
+environment variable, see
+\fBudevd\fR(8)\&.
+.RE
+.PP
+parent
+.RS 4
+Import the properties of the parent device, both the ones of its uevent file and the ones stored in its database entry\&. The value assigned to
+\fBIMPORT{parent}\fR
+is used as a filter of key names to import (with the same shell glob pattern matching used for comparisons)\&. The properties that cannot be set, e\&.g\&. the parent\*(Aqs
+\fIDEVPATH\fR
+or
+\fISUBSYSTEM\fR, are not imported, see below\&. The import is successful when at least one property was imported\&.
+.RE
+.sp
+This can only be used for very short\-running foreground tasks\&. For details see
+\fBRUN\fR\&.
+.sp
+The properties that cannot be assigned with
+\fIENV{\fR\fI\fIkey\fR\fR\fI}\fR
+(see above), i\&.e\&. the ones that describe the device and the event, like
+\fIDEVPATH\fR,
+\fISUBSYSTEM\fR,
+\fIACTION\fR,
+\fISEQNUM\fR,
+\fISYNTH_UUID\fR,
+\fIDEVNAME\fR,
+\fIMAJOR\fR
+and
+\fIMINOR\fR, are not imported either: such a line of the output of
+program
+or of a
+file, and such a property of the parent device, are skipped, and
+db
+and
+cmdline
+with such a name are false; for them, a warning is logged when the rules are read, and by
+\fBudevadm verify\fR, but the rule is kept, so that e\&.g\&.\&
+IMPORT{db}!="DEVNAME"
+is true\&. The
+hwdb
+built\-in command skips them in the entries of the hardware database\&. Otherwise the event that udev sends to the event listeners would look like an event of another device, or one with another action, and the database would keep the values\&.
+.sp
+Note that multiple
+\fIIMPORT{}\fR
+keys may be specified in one rule, and
+=,
+:=, and
++=
+have the same effect as
+==\&. The key is true if the import is successful, unless
+!=
+is used as the operator which causes the key to be true if the import failed\&.
+.sp
+Some errors are not a failed import, but stop the processing of the event: when the file of
+IMPORT{file}
+exists but cannot be opened, when the kernel command line cannot be read for
+IMPORT{cmdline}, or when the memory runs out\&. Then no further rules are applied, the device node and its symlinks are not handled, the database is not updated, and the programs of
+\fIRUN\fR
+are not run; the event is still sent to the event listeners\&.
+.RE
+.PP
+\fIOPTIONS\fR
+.RS 4
+Rule and device options\&. Several options may be given in one value, separated by commas, e\&.g\&.\&
+OPTIONS+="watch,link_priority=10"; each one must be exactly one of the options below\&. An unknown option is ignored with a warning, and the rest of the rule is applied\&. An invalid value of
+\fBlink_priority=\fR
+or
+\fBlog_level=\fR
+makes the rule line invalid, as do the operators
+==,
+!=
+and
+\-=;
++=
+has the same effect as
+=\&.
+.PP
+\fBlink_priority=\fR\fB\fIvalue\fR\fR
+.RS 4
+Specify the priority of the created symlinks\&. Devices with higher priorities overwrite existing symlinks of other devices\&. The default is 0\&.
+.RE
+.PP
+\fBstring_escape=\fR\fB\fInone|replace\fR\fR
+.RS 4
+When
+replace, possibly unsafe characters in strings assigned to
+\fINAME\fR,
+\fISYMLINK\fR, and
+\fIENV{\fR\fI\fIkey\fR\fR\fI}\fR
+are replaced\&. When
+none, no replacement is performed\&. When unset, the replacement is performed for
+\fINAME\fR,
+\fISYMLINK\fR, but not for
+\fIENV{\fR\fI\fIkey\fR\fR\fI}\fR\&. Defaults to unset\&.
+.RE
+.PP
+\fBstatic_node=\fR
+.RS 4
+Apply the permissions specified in this rule to the static device node with the specified name\&. Static device node creation can be requested by kernel modules\&. These nodes might not have a corresponding kernel device at the time udevd is started; they can trigger automatic kernel module loading\&. The values that are known when the rules are read are applied, like in systemd: an
+\fIOWNER\fR
+or
+\fIGROUP\fR
+that is a number, or a name without substitutions when names are resolved early, a
+\fIMODE\fR
+without substitutions, and the
+\fITAG\fR
+values; also the value 0, e\&.g\&.\&
+OWNER="root"\&.
+.RE
+.PP
+\fBnet_altnames\fR
+.RS 4
+Assign alternative names to a network interface when it is added\&. After the
+add
+event is processed and the interface is renamed, if requested, the values of the
+\fIID_NET_NAME_FROM_DATABASE\fR,
+\fIID_NET_NAME_ONBOARD\fR,
+\fIID_NET_NAME_SLOT\fR,
+\fIID_NET_NAME_PATH\fR
+and
+\fIID_NET_NAME_MAC\fR
+properties that are valid alternative names, i\&.e\&. valid interface names (see
+\fINAME\fR) with up to 127 characters, and differ from the name of the interface, are assigned to it as alternative names, like the default
+\fIAlternativeNamesPolicy=\fR
+of systemd does\&. Names that the interface already has are not assigned again, names used by other interfaces are skipped\&. As in systemd, they are not assigned when renaming the interface fails, unless it is up\&. Alternative names require Linux 5\&.5 or later, older kernels are silently ignored\&.
+\fBudevadm test\fR
+does not assign them, but shows them, like systemd, also the name the interface would get\&. Nothing is done when
+\fInet_altnames=no\fR
+is set in
+\fBudev.conf\fR(5)\&.
+.RE
+.PP
+\fBwatch\fR
+.RS 4
+Watch the device node with inotify; when the node is closed after being opened for writing, a change uevent is synthesized\&.
+.RE
+.PP
+\fBnowatch\fR
+.RS 4
+Disable the watching of a device node with inotify\&.
+.RE
+.PP
+\fBdb_persist\fR
+.RS 4
+Set the flag (sticky bit) on the udev database entry of the event device\&. Device properties are then kept in the database even when
+\fBudevadm info \-\-cleanup\-db\fR
+is called\&. This option can be useful in certain cases (e\&.g\&. Device Mapper devices) for persisting device state on the transition from initramfs\&.
+.RE
+.PP
+\fBlog_level=\fR\fB\fIlevel\fR\fR
+.RS 4
+Takes a log level name like
+debug
+or
+info, or a special value
+reset\&. When a log level name is specified, the maximum log level is changed to that level\&. When
+reset
+is set, then the previously specified log level is revoked\&. Defaults to the log level of the main process of
+\fBudevd\fR\&.
+.sp
+This may be useful when debugging events for certain devices\&. Note that the log level is applied when the line including this rule is processed\&. So, for debugging, it is recommended that this is specified at earlier place, e\&.g\&., the first line of
+00\-debug\&.rules\&.
+.sp
+Example for debugging uevent processing for network interfaces\&.
+.sp
+.if n \{\
+.RS 4
+.\}
+.nf
+# /etc/udev/rules\&.d/00\-debug\-net\&.rules
+SUBSYSTEM=="net", OPTIONS="log_level=debug"
+.fi
+.if n \{\
+.RE
+.\}
+.RE
+.PP
+\fBdump\fR
+.RS 4
+Dump the status of the event currently processing\&. It may be useful for debugging udev rules by inserting this option\&.
+.RE
+.PP
+\fBdump\-json\fR
+.RS 4
+Similar to
+\fBdump\fR, but dump the status of the event in JSON format\&.
+.RE
+.RE
+.PP
+Like in systemd, some errors while a rule is applied stop the processing of the event, like the ones of
+\fIIMPORT\fR
+above: when
+\fISYSCTL{}\fR
+cannot read the kernel parameter, unless it does not exist; when a
+*
+path component of
+\fITEST\fR
+cannot be resolved because the directory cannot be read; when
+\fIENV{}\fR
+cannot remove a property, e\&.g\&. because its name is not valid; and when the memory runs out\&. Then no further rules are applied, the device node and its symlinks are not handled, the database is not updated, and the programs of
+\fIRUN\fR
+are not run; the event is still sent to the event listeners\&.
+.PP
+The
+\fINAME\fR,
+\fISYMLINK\fR,
+\fIPROGRAM\fR,
+\fIOWNER\fR,
+\fIGROUP\fR,
+\fIMODE\fR,
+\fISECLABEL\fR, and
+\fIRUN\fR
+fields support simple string substitutions\&. The substitutions are performed while the individual rule is being processed, so they use the device properties set by the preceding rules\&. Like in systemd, when the result does not fit into the buffer of the key (for example 512 bytes for
+\fIENV\fR, 1024 bytes for
+\fISYMLINK\fR, 16384 bytes for
+\fIPROGRAM\fR
+and
+\fIRUN\fR), a match key fails, with a debug message, and an assignment key is not applied, with a warning; an invalid substitution, e\&.g\&. one with a missing closing brace, ends the result there, with a warning\&. The available substitutions are:
+.PP
+\fB$kernel\fR, \fB%k\fR
+.RS 4
+The kernel name for this device\&.
+.RE
+.PP
+\fB$number\fR, \fB%n\fR
+.RS 4
+The kernel number for this device\&. For example,
+sda3
+has kernel number
+3\&.
+.RE
+.PP
+\fB$devpath\fR, \fB%p\fR
+.RS 4
+The devpath of the device\&.
+.RE
+.PP
+\fB$id\fR, \fB%b\fR
+.RS 4
+The name of the device matched while searching the devpath upwards for
+\fBSUBSYSTEMS\fR,
+\fBKERNELS\fR,
+\fBDRIVERS\fR, and
+\fBATTRS\fR\&.
+.RE
+.PP
+\fB$driver\fR
+.RS 4
+The driver name of the device matched while searching the devpath upwards for
+\fBSUBSYSTEMS\fR,
+\fBKERNELS\fR,
+\fBDRIVERS\fR, and
+\fBATTRS\fR\&.
+.RE
+.PP
+\fB$attr{\fR\fB\fIfile\fR\fR\fB}\fR, \fB%s{\fR\fB\fIfile\fR\fR\fB}\fR
+.RS 4
+The value of a sysfs attribute found at the device where all keys of the rule have matched\&. If the matching device does not have such an attribute, and a previous
+\fBKERNELS\fR,
+\fBSUBSYSTEMS\fR,
+\fBDRIVERS\fR, or
+\fBATTRS\fR
+test selected a parent device, then the attribute from that parent device is used\&.
+.sp
+If the attribute is a symlink, the last element of the symlink target is returned as the value\&.
+.RE
+.PP
+\fB$env{\fR\fB\fIkey\fR\fR\fB}\fR, \fB%E{\fR\fB\fIkey\fR\fR\fB}\fR
+.RS 4
+A device property value\&. When the device does not have the property, the value of the global property set with
+\fBudevadm control \-\-property\fR, if there is one\&.
+.RE
+.PP
+\fB$major\fR, \fB%M\fR
+.RS 4
+The kernel major number for the device\&.
+.RE
+.PP
+\fB$minor\fR, \fB%m\fR
+.RS 4
+The kernel minor number for the device\&.
+.RE
+.PP
+\fB$result\fR, \fB%c\fR
+.RS 4
+The string returned by the external program requested with
+\fIPROGRAM\fR\&. A single part of the string, separated by whitespace, may be selected by specifying the part number as an attribute:
+%c{N}\&. If the number is followed by the
++
+character, this part plus all remaining parts of the result string are substituted:
+%c{N+}\&. Like in systemd, the parts are counted from 1, after leading whitespace, and 0 selects the whole string; a part number that is not a number is an error, which stops the substitution with a warning, and which
+\fBudevadm verify\fR
+reports\&.
+.RE
+.PP
+\fB$parent\fR, \fB%P\fR
+.RS 4
+The node name of the parent device\&.
+.RE
+.PP
+\fB$name\fR
+.RS 4
+The current name of the device\&. If not changed by a rule, it is the name of the kernel device\&.
+.RE
+.PP
+\fB$links\fR
+.RS 4
+A space\-separated list of the current symlinks\&. The value is only set during a remove event or if an earlier rule assigned a value\&.
+.RE
+.PP
+\fB$sys\fR, \fB%S\fR
+.RS 4
+The sysfs mount point\&.
+.RE
+.PP
+\fB$devnode\fR, \fB%N\fR
+.RS 4
+The name of the device node\&.
+.RE
+.PP
+\fB%%\fR
+.RS 4
+The
+%
+character itself\&.
+.RE
+.PP
+\fB$$\fR
+.RS 4
+The
+$
+character itself\&.
+.RE
+.SH "BUILT\-IN COMMANDS"
+Built\-in commands are run with
+\fIIMPORT{builtin}\fR
+and
+\fIRUN{builtin}\fR\&.
+\fBudevadm test\-builtin \-\-help\fR
+lists the available builtins, and
+\fBudevadm test\-builtin\fR
+runs one on a device and prints the properties it sets\&. The builtins and properties described here are compatible with systemd\-udevd\&.
+.SS "blkid"
+\fBblkid\fR
+[\fB\-\-offset=\fR\fIbytes\fR] [\fB\-\-hint=\fR\fIname\fR=\fIvalue\fR] [\fB\-\-noraid\fR] probes a block device for file systems and partition tables with libblkid and sets
+\fIID_FS_*\fR
+and
+\fIID_PART_*\fR
+properties\&. Among them:
+.PP
+\fIID_FS_VOLUME_ID=\fR, \fIID_FS_LOGICAL_VOLUME_ID=\fR, \fIID_FS_VOLUME_SET_ID=\fR, \fIID_FS_DATA_PREPARER_ID=\fR
+.RS 4
+The volume, logical volume, volume set and data preparer identifiers, which libblkid 2\&.37 and newer reports for e\&.g\&. ISO 9660 and UDF file systems\&. Like in
+\fIID_FS_LABEL_ENC=\fR, characters that are not safe are encoded as
+\ex\fInn\fR\&.
+.RE
+.PP
+\fIID_PART_GPT_AUTO_ROOT_DISK=1\fR, \fIID_PART_GPT_AUTO_ROOT_UUID=\fR
+.RS 4
+Set on the whole disk with a GPT partition table that the root file system is expected on, together with the partition UUID of its root partition, if it has one\&. In the initrd, this is the disk that carries the EFI System Partition or the XBOOTLDR partition whose partition UUID the boot loader reports in the
+\fILoaderDevicePartUUID\-4a67b082\-0a4c\-41cf\-b6c7\-440b29bb8c4f\fR
+EFI variable (systemd\-boot and GRUB with the
+bli
+module set it), or, without that variable, a loop device whose backing file name is
+rootdisk
+or
+rootdisk\&.raw\&. The root partition is the partition with the root partition type of the native architecture (e\&.g\&.\&
+4f68bce3\-e8cd\-4db1\-96e7\-fbcaf984b709
+on x86\-64) that has the newest version in its label; partitions with the
+no\-auto
+flag (bit 63) and partitions labelled
+_empty
+are skipped\&. After the initrd, it is the disk that the root file system is on (also through dm\-crypt, dm\-verity or a single\-device btrfs), and the partition that holds it, if it has the root partition type\&. The initrd is recognized by
+/etc/initrd\-release
+and a tmpfs or ramfs root file system\&. Only whole disks with partition scanning enabled are considered\&.
+.RE
+.PP
+\fIID_PART_GPT_AUTO_ROOT=1\fR
+.RS 4
+Set on the partition whose partition UUID matches
+\fIID_PART_GPT_AUTO_ROOT_UUID=\fR
+of its disk\&.
+90\-image\-dissect\&.rules
+creates the symlink
+/dev/gpt\-auto\-root
+for it, or
+/dev/gpt\-auto\-root\-luks
+if it is a LUKS volume\&. While a factory reset is in progress (\fIID_FACTORY_RESET=on\fR, see below), it gets
+/dev/gpt\-auto\-root\-ignore\-factory\-reset
+or
+/dev/gpt\-auto\-root\-luks\-ignore\-factory\-reset
+instead, and once the factory reset is complete, both\&. When the LUKS volume is unlocked as a device mapper device named
+root, that device gets
+/dev/gpt\-auto\-root, and also
+/dev/gpt\-auto\-root\-ignore\-factory\-reset
+while a factory reset is in progress or complete\&.
+.RE
+.PP
+\fIID_PART_GPT_SECTOR_SIZE=\fR
+.RS 4
+The sector size, 512, 1024, 2048 or 4096, for which the GPT partition table of the device was written, as found by looking for the GPT header in the second sector for each of these sizes\&. Set on every device with a GPT partition table that
+\fBblkid\fR
+is run on without
+\fB\-\-offset=\fR\&.
+.RE
+.PP
+\fIID_PART_GPT_AUTO_ROOT_DISK_NEEDS_LOOP=1\fR
+.RS 4
+Set on a disk whose GPT partitions the kernel cannot expose itself, because the partition table was written for another sector size than the one of the device (e\&.g\&. a GPT for 512\-byte sectors on a CD\-ROM with 2048\-byte blocks that was booted via El Torito) or because partition scanning is not enabled on the device, if it carries the EFI System Partition or the XBOOTLDR partition whose partition UUID the boot loader reports in the
+\fILoaderDevicePartUUID\-4a67b082\-0a4c\-41cf\-b6c7\-440b29bb8c4f\fR
+EFI variable\&. systemd then sets up a loop device with the sector size of
+\fIID_PART_GPT_SECTOR_SIZE=\fR
+to expose the partitions; eudev only sets the property, and ships no rule that sets up the loop device\&.
+.RE
+.SS "factory_reset"
+\fBfactory_reset status\fR
+sets
+\fIID_FACTORY_RESET=\fR
+to the factory reset state, as systemd determines it, so that rules can e\&.g\&. ignore devices while a factory reset is in progress:
+.PP
+unsupported
+.RS 4
+The environment variable
+\fI$SYSTEMD_FACTORY_RESET_SUPPORTED\fR
+of the udev daemon is set to false\&.
+.RE
+.PP
+complete
+.RS 4
+/run/systemd/factory\-reset\-complete
+exists\&.
+.RE
+.PP
+on, off
+.RS 4
+The kernel command line option
+\fIsystemd\&.factory_reset=\fR
+(or
+\fIsystemd\&.factory\-reset=\fR) is set to true or false; the option without a value means true\&. If it is not set, the state is
+on
+if the
+\fIFactoryResetRequest\-8cf2644b\-4b0b\-428f\-9387\-6d876050dc67\fR
+EFI variable requests a factory reset for this boot: it holds a JSON object whose
+\fIosReleaseId\fR
+and
+\fIosReleaseImageId\fR
+members match
+\fIID=\fR
+and
+\fIIMAGE_ID=\fR
+of
+/etc/os\-release
+(or
+/usr/lib/os\-release, or the file that
+\fI$SYSTEMD_OS_RELEASE\fR
+names), and whose
+\fIbootId\fR
+member differs from the current boot ID (/proc/sys/kernel/random/boot_id)\&.
+.RE
+.PP
+pending
+.RS 4
+The EFI variable requests a factory reset for the next boot: its
+\fIbootId\fR
+is the current boot ID\&.
+.RE
+.PP
+unspecified
+.RS 4
+None of the above: the system was not booted with EFI, or the EFI variable is not set, not valid, or meant for another operating system\&.
+.RE
+.PP
+The checks are done in the order listed\&. If the state cannot be determined, e\&.g\&. because
+\fIsystemd\&.factory_reset=\fR
+has a value that is not a boolean or os\-release cannot be read, the property is not set\&.
+.SS "tpm2_id"
+\fBtpm2_id identify\fR, which
+60\-tpm2\-id\&.rules
+runs on
+/dev/tpmrm\fIN\fR, identifies TPM 2\&.0 chips\&. Like systemd, it starts up the TPM if the firmware has not done so, and only identifies TPMs that support AES\-128 in CFB mode, which systemd requires for session encryption; other TPMs are skipped without an error\&. It talks to the TPM through the kernel\*(Aqs device node and needs no TPM libraries\&. It sets:
+.PP
+\fIID_TPM2_MANUFACTURER=\fR, \fIID_TPM2_VENDOR_STRING=\fR
+.RS 4
+The manufacturer code and the vendor string that the TPM reports, with whitespace, control characters and non\-ASCII bytes replaced by
+_\&.
+.RE
+.PP
+\fIID_TPM2_MODALIAS=\fR
+.RS 4
+A string that describes the TPM for hwdb lookups\&. It lists the family indicator (fi), level (lv), revision (rv), year (sy) and day of year (sd) of the specification, the manufacturer (mf), the vendor string (vs), the vendor TPM type in hexadecimal (ty) and the firmware version (fw), each after its two letter code and followed by a colon, e\&.g\&.\&
+fi2\&.0:\:lv0:\:rv1\&.16:\:sy2019:\:sd346:\:mfSTM:\:vsST33HTPHAHD8:\:ty1:\:fw73\&.4\&.65536:\&.
+60\-tpm2\-id\&.rules
+looks up
+tpm2:
+followed by it in the hwdb;
+60\-tpm2\&.hwdb
+sets
+\fITPM2_BROKEN_NVPCR=1\fR
+on TPMs on which the NV index based PCRs of systemd do not work\&.
+.RE
+.PP
+This builtin and
+60\-tpm2\-id\&.rules
+are left out when eudev is built with
+\fB\-\-disable\-tpm2\fR; a rule line that uses the builtin, or runs a program named
+\fBtpm2_id\fR
+with
+\fIPROGRAM\fR
+or
+\fIRUN\fR, is then ignored with an error message saying so\&.
+.SH "NETWORK INTERFACE NAMING"
+For network interfaces, the
+\fBnet_id\fR
+builtin, which is imported by
+75\-net\-description\&.rules, generates predictable names from firmware information, from the location of the device on its bus, and from its MAC address, and exports them as device properties\&. Depending on the
+\fInet\&.ifnames=\fR
+kernel command line option (see
+\fBudevd\fR(8)),
+80\-net\-name\-slot\&.rules
+renames the interface to the first one of
+\fIID_NET_NAME_FROM_DATABASE\fR,
+\fIID_NET_NAME_ONBOARD\fR,
+\fIID_NET_NAME_SLOT\fR,
+\fIID_NET_NAME_PATH\fR
+and
+\fIID_NET_NAME_MAC\fR
+that is a valid interface name (see
+\fINAME\fR), e\&.g\&. not longer than 15 characters, as systemd does, unless an earlier rule assigned
+\fINAME=\fR\&. This is the order of the default
+\fINamePolicy=\fR
+of systemd, which however does not use
+\fIID_NET_NAME_MAC\fR\&. Like its
+keep
+and
+kernel
+policies, the interface is not renamed when its name was given by userspace, i\&.e\&. when it was created with a name or was already renamed, or when the kernel says it named it predictably, i\&.e\&. when the
+name_assign_type
+attribute of the interface is 3 (\fBNET_NAME_USER\fR), 4 (\fBNET_NAME_RENAMED\fR) or 2 (\fBNET_NAME_PREDICTABLE\fR)\&.
+\fIID_NET_NAME_FROM_DATABASE\fR
+is not set by
+\fBnet_id\fR, but by the hwdb, e\&.g\&. to
+idrac
+for the virtual USB network interface of Dell iDRAC by
+20\-net\-ifname\&.hwdb, which
+75\-net\-description\&.rules
+imports for USB and PCI devices\&.
+.PP
+By default,
+80\-net\-name\-slot\&.rules
+renames interfaces unless the kernel command line has
+\fInet\&.ifnames=0\fR\&. When eudev is built with
+\fB\-\-with\-net\-ifnames\-default=no\fR, interfaces keep the names the kernel gave them unless the kernel command line has
+\fInet\&.ifnames=1\fR\&. When eudev is built with
+\fB\-\-enable\-rule\-generator\fR, the rule generator keeps the names that the kernel gave the interfaces from one boot to the next (see
+the section called \(lqThe rule generator\(rq): by default, it replaces
+80\-net\-name\-slot\&.rules, which is not installed, and
+\fInet\&.ifnames=\fR
+changes nothing; when eudev is also built with
+\fB\-\-with\-net\-ifnames\-default=no\fR,
+80\-net\-name\-slot\&.rules
+is installed, and with
+\fInet\&.ifnames=1\fR
+the rule generator does nothing\&.
+.PP
+80\-net\-altnames\&.rules
+requests
+\fIOPTIONS+="net_altnames"\fR, so that these names, except the one the interface is renamed to, are also assigned as alternative names of the interface, also the ones longer than 15 characters, like systemd does by default\&. That is independent of
+\fInet\&.ifnames=\fR, unless eudev is built with
+\fB\-\-with\-net\-ifnames\-default=no\fR: then it is only done with
+\fInet\&.ifnames=1\fR, like the renaming\&. It is also done for interfaces that are not renamed, and with the rule generator\&. The alternative names are shown by e\&.g\&.\&
+\fBip link show\fR, and can be used instead of the interface name by
+\fBip\fR
+and other tools\&. This can be disabled with
+\fInet_altnames=no\fR
+in
+\fBudev.conf\fR(5)\&.
+.PP
+All names start with a two character prefix for the type of the interface:
+en
+for Ethernet,
+ib
+for InfiniBand,
+sl
+for serial line IP (slip),
+wl
+for wireless LAN,
+ww
+for wireless WAN and
+mc
+for MCTP\&. Names that do not fit into the 15 characters of an interface name are exported as well, up to 127 characters, but
+80\-net\-name\-slot\&.rules
+does not rename the interface to them\&. The following properties are set:
+.PP
+\fIID_NET_NAMING_SCHEME=\fR
+.RS 4
+The naming scheme the names were generated with, see below\&.
+.RE
+.PP
+\fIID_NET_NAME_ONBOARD=\fR\fIprefix\fRo\fIindex\fR[\fIport\fR][\fIsuffix\fR], \fIID_NET_NAME_ONBOARD=\fR\fIprefix\fRd\fIindex\fR
+.RS 4
+The index number the firmware provides for an on\-board PCI device (ACPI
+_DSM
+or SMBIOS type 41), or the index of the DeviceTree alias (ethernet\fIN\fR,
+wifi\fIN\fR) of the device\&.
+.RE
+.PP
+\fIID_NET_LABEL_ONBOARD=\fR\fIlabel\fR
+.RS 4
+The label the firmware provides for an on\-board PCI device\&. It is not used as an interface name\&.
+.RE
+.PP
+\fIID_NET_NAME_SLOT=\fR\fIprefix\fR[P\fIdomain\fR]s\fIslot\fR[f\fIfunction\fR][\fIport\fR][\fIsuffix\fR], \fIID_NET_NAME_SLOT=\fR\fIprefix\fRv\fIslot\fR, \fIID_NET_NAME_SLOT=\fR\fIprefix\fRX\fInumber\fR
+.RS 4
+The PCI slot number of the device, as provided by the firmware; the IBM PowerVM VIO slot number; the Xen netfront VIF number\&.
+.RE
+.PP
+\fIID_NET_NAME_PATH=\fR\fIprefix\fR[P\fIdomain\fR]p\fIbus\fRs\fIslot\fR[f\fIfunction\fR][\fIport\fR][\fIsuffix\fR], \fIID_NET_NAME_PATH=\fR\:\fIprefix\fRc\fIbus_id\fR, \fIID_NET_NAME_PATH=\fR\:\fIprefix\fRa\fIvendor\fR\fImodel\fRi\fIinstance\fR, \fIID_NET_NAME_PATH=\fR\:\fIprefix\fRi\fIaddress\fRn\fIport_name\fR, \fIID_NET_NAME_PATH=\fR\:\fIprefix\fRu\fIport\fR\&.\&.\&.
+.RS 4
+The location of the device: the PCI bus, slot and function numbers; the bus ID of an s390 CCW device, without leading zeros; the ACPI name of an ARM64 platform device; the address and port name of a netdevsim device; the port chain of a USB device on a USB host controller that is not a PCI device\&.
+.RE
+.PP
+\fIID_NET_NAME_MAC=\fR\fIprefix\fRx\fIAABBCCDDEEFF\fR
+.RS 4
+The permanent MAC address of the device\&. As in systemd since version 250, it is also set for an address of all zeros, except in the
+eudev
+scheme, but such a name, e\&.g\&.\&
+enx000000000000, is not unique, and
+80\-net\-name\-slot\&.rules
+never renames an interface to it\&.
+.RE
+.PP
+The parts of the PCI based names are:
+.PP
+P\fIdomain\fR
+.RS 4
+The PCI domain, only when it is not 0, or as the
+\fIID_NET_NAME_INCLUDE_DOMAIN=\fR
+property of the PCI device says\&. It is left out of slot names when the slot of an s390 PCI device is found by its
+function_id\&.
+.RE
+.PP
+f\fIfunction\fR
+.RS 4
+The PCI function; for multi\-function devices also for function 0\&. With ARI, the full 8\-bit function number\&.
+.RE
+.PP
+n\fIphys_port_name\fR, d\fIdev_port\fR
+.RS 4
+The port name or, when there is none, the port number of one of several ports of a single PCI function\&.
+.RE
+.PP
+r\fInumber\fR
+.RS 4
+An SR\-IOV virtual function representor, named after the physical function, with the number of the virtual function instead of the port\&.
+.RE
+.PP
+v\fInumber\fR
+.RS 4
+An SR\-IOV virtual function, named after its physical function\&.
+.RE
+.PP
+S\fIsfnum\fR
+.RS 4
+An auxiliary sub\-function (e\&.g\&. of mlx5_core), named after its PCI function\&.
+.RE
+.PP
+u\fIport\fR\&.\&.\&.[c\fIconfig\fR][i\fIinterface\fR]
+.RS 4
+A USB device: the chain of hub port numbers, the configuration unless it is 1 and the interface unless it is 0\&.
+.RE
+.PP
+b\fInumber\fR
+.RS 4
+A Broadcom bus (BCMA) core, unless it is 0\&.
+.RE
+.SS "Naming schemes"
+New versions add new kinds of names and improve existing ones, which changes the names of some devices\&. The naming logic of the
+\fBnet_id\fR
+builtin of a given version is called a naming scheme, and it can be selected with
+\fInet_naming_scheme=\fR
+in
+\fBudev.conf\fR(5)
+or
+\fInet\&.naming_scheme=\fR
+on the kernel command line (see
+\fBudevd\fR(8)), which takes precedence, to keep the names stable\&. The environment variable
+\fI$NET_NAMING_SCHEME\fR
+may also be used, e\&.g\&. to preview the names with
+\fBudevadm test\-builtin net_id\fR; it takes precedence over both, unless it is prefixed with
+:\&. The schemes
+v238
+and later are the ones of systemd and generate the same names as systemd does\&. The default is
+latest\&. Unknown names are ignored with a warning, and the next setting in the order above is used\&.
+.PP
+A naming scheme selects only the names that
+\fBnet_id\fR
+generates, i\&.e\&. the
+\fIID_NET_NAME_*\fR
+properties\&. Which one of them an interface is renamed to is decided by
+80\-net\-name\-slot\&.rules
+as described above, the same way with all schemes, e\&.g\&.\&
+\fIID_NET_NAME_FROM_DATABASE\fR
+is preferred, and interfaces named by userspace or predictably by the kernel are not renamed, also with the
+eudev
+scheme, which eudev 3\&.2\&.15 did not do\&. The following schemes are defined:
+.PP
+eudev
+.RS 4
+The names generated by the
+\fBnet_id\fR
+builtin of eudev 3\&.2\&.15 and older, which are based on those of systemd 220\&.
+.RE
+.PP
+v238
+.RS 4
+The naming of systemd 238\&. Compared to
+eudev: virtio network devices are named after their PCI or CCW device; onboard indexes above 16383 are ignored; the port name (n\fIphys_port_name\fR) is preferred over the port number; the names of s390 CCW devices are
+enc\fIbus_id\fR
+without leading zeros, instead of
+enccw\fIbus_id\fR; IBM PowerVM VIO and ARM64 ACPI platform devices are named; the hotplug slot of a parent PCI device is used when the device has none, and slot names with leading zeros, like those of s390, are parsed as octal numbers;
+\fIID_NET_LABEL_ONBOARD\fR
+is also set for devices without an onboard index; and the
+\fIID_NET_NAME_ALLOW\fR
+and
+\fIID_NET_NAME_INCLUDE_DOMAIN\fR
+properties are used\&.
+.RE
+.PP
+v239
+.RS 4
+SR\-IOV virtual functions are named after their physical function with a
+v\fInumber\fR
+suffix\&. Devices using ARI (e\&.g\&. NPAR partitions) use the full function number\&.
+.RE
+.PP
+v240
+.RS 4
+InfiniBand devices get names with the
+ib
+prefix\&. An onboard index of 0 is used\&.
+.RE
+.PP
+v241
+.RS 4
+Same names as
+v240\&.
+.RE
+.PP
+v243
+.RS 4
+netdevsim devices are named\&.
+\fIID_NET_LABEL_ONBOARD\fR
+is not prefixed with the interface type anymore\&.
+.RE
+.PP
+v245
+.RS 4
+Same names as
+v243\&.
+.RE
+.PP
+v247
+.RS 4
+\fIID_NET_NAME_SLOT\fR
+is not set when the slot belongs to a PCI bridge, as all devices behind it would get the same name\&.
+.RE
+.PP
+v249
+.RS 4
+The slots of s390 PCI devices are found by their
+function_id\&. Onboard indexes up to 65535 are used\&.
+.RE
+.PP
+v250
+.RS 4
+Xen netfront devices are named\&.
+.RE
+.PP
+v251
+.RS 4
+The slot of a PCI bridge is used again for multi\-function devices behind it\&. This is reverted in
+v255\&.
+.RE
+.PP
+v252
+.RS 4
+Devices with a DeviceTree
+ethernet\fIN\fR
+alias are named\&.
+.RE
+.PP
+v253
+.RS 4
+USB devices on a USB host controller that is not a PCI device are named\&.
+.RE
+.PP
+v254
+.RS 4
+SR\-IOV virtual function representors are named with an
+r\fInumber\fR
+suffix instead of their port name\&.
+.RE
+.PP
+v255
+.RS 4
+The change of
+v251
+is reverted\&.
+.RE
+.PP
+v257
+.RS 4
+The PCI slot is read from
+firmware_node/sun\&. The DeviceTree alias of the network interface itself is preferred over the one of its parent device\&.
+.RE
+.PP
+v258
+.RS 4
+Same names as
+v257\&.
+.RE
+.PP
+v259
+.RS 4
+WLAN devices with a DeviceTree
+wifi\fIN\fR
+or
+ethernet\fIN\fR
+alias are named\&.
+.RE
+.PP
+v260
+.RS 4
+MCTP devices are named, with the
+mc
+prefix\&.
+.RE
+.PP
+v261
+.RS 4
+Auxiliary sub\-functions are named after their PCI function with an
+S\fIsfnum\fR
+suffix\&.
+.RE
+.PP
+latest
+.RS 4
+The latest scheme, currently
+v261\&.
+.RE
+.PP
+Note that a naming scheme only fixes the rules; the names may still change when a new kernel version exposes more information, e\&.g\&. a
+phys_port_name
+attribute\&.
+.SS "Limiting the use of sysfs attributes"
+With the systemd naming schemes, the sysfs attributes used for a name can be restricted with properties of the device the attribute belongs to\&.
+\fIID_NET_NAME_ALLOW=0\fR
+disallows all attributes that are not explicitly allowed, and
+\fIID_NET_NAME_ALLOW_\fR\fIATTRIBUTE\fR\fI=\fR
+allows (1) or disallows (0) a specific attribute, e\&.g\&.\&
+\fIID_NET_NAME_ALLOW_PHYS_PORT_NAME=0\fR\&. For network interfaces, such properties are usually set in the hwdb, where
+75\-net\-description\&.rules
+looks them up with the key
+net:naming:dr\fIdriver\fR:, for example:
+.sp
+.if n \{\
+.RS 4
+.\}
+.nf
+# /etc/udev/hwdb\&.d/50\-net\-naming\-denylist\&.hwdb
+net:naming:drvirtio_net:*
+ ID_NET_NAME_ALLOW_PHYS_PORT_NAME=0
+.fi
+.if n \{\
+.RE
+.\}
+.SS "The rule generator"
+When eudev is built with
+\fB\-\-enable\-rule\-generator\fR,
+75\-persistent\-net\-generator\&.rules
+keeps the names that the kernel gives network interfaces, e\&.g\&.\&
+eth0, from one boot to the next, also when the kernel finds the interfaces in another order: the first time an interface appears, its program
+\fBwrite_net_rules\fR
+writes a rule with the name of the interface to
+/etc/udev/rules\&.d/70\-persistent\-net\&.rules, which gives the interface that name on the next boots\&. When a rule there gives that name to another interface already, the rule gets the name with the next number after the highest one there, e\&.g\&.\&
+eth1, and the interface is renamed to it at once\&. The rule matches the MAC address of the interface, its type and its
+dev_id
+attribute, and for S/390 devices their bus id and driver instead, never only its type and kernel name\&. Only interfaces that the kernel named by enumeration get a rule, i\&.e\&. whose
+name_assign_type
+attribute is 1 (\fBNET_NAME_ENUM\fR) or cannot be read, as on kernels before 3\&.17, which do not have it, and whose names are
+eth*,
+wlan*
+or a few other kernel names, and only when they have a driver, unlike e\&.g\&. bridges and VLANs, and no name from an earlier rule; not the interfaces of Xen and User\-mode Linux, the monitor interfaces of wireless devices, and the ones whose MAC address is locally administered (except the addresses of some vendors that do not follow that scheme), all zeros, or one of a virtual machine, e\&.g\&. of KVM, QEMU, VMware, Hyper\-V, VirtualBox or Xen\&. The prefixes listed for Microsoft Azure are registered to Microsoft, not only for Azure, so interfaces of Microsoft hardware with such an address get no rule either; 54:52:00, which is registered to no one, is listed for the guests that old versions of libvirt created with it, which keep their addresses\&. The rules may be edited, keeping each rule on one line and changing only the value of
+\fINAME\fR, and when the file is removed, the current names are recorded again\&. When
+/etc/udev/rules\&.d
+cannot be written, e\&.g\&. as the root file system is still read\-only, the rules are written to
+/run/udev/tmp\-rules\-\-70\-persistent\-net\&.rules
+instead, which eudev does not copy: the system has to add that file to
+70\-persistent\-net\&.rules
+later during the boot, e\&.g\&. with an init script\&.
+\fBwrite_net_rules\fR
+logs a warning when it writes no rule: "no MAC address or bus id to match
+\fIinterface\fR
+with, writing no rule", when neither the address nor a bus id can be used, e\&.g\&. for a name requested with
+\fIINTERFACE_NAME\fR, and "Cannot lock
+\fIfile\fR!", when it gives up after waiting 30 seconds for the lock of the rules file; it writes them to its standard error, which
+\fBudevd\fR
+logs at the debug level, and, when
+/dev/kmsg
+can be written, to the kernel log at the warning level, as
+write_net_rules[\fIpid\fR]\&.
+.PP
+Network interfaces then also swap their names, e\&.g\&. when the kernel finds them in another order than the rules expect, or after the names in the rules were swapped: when an interface is to get a new name, and a rule gives its current name to another interface,
+\fBudevd\fR
+first renames it to a temporary name, with a number derived from its interface index instead of its own, e\&.g\&.\&
+eth126, so that the other interface can get the name; when the name that an interface is to get is taken, it renames the interface to
+rename_\fIname\fR, or
+rename\fIindex\fR
+when that is longer than 15 characters, and waits up to 90 seconds, but not beyond the event timeout (see
+\fBudevd\fR(8)), for the name to become free, and renames it back to its old name when it does not\&. It skips that, or stops waiting, as soon as
+\fBudevd\fR
+has handled the add event of the interface that has the name: as only add events rename an interface, that one keeps it\&. An interface that gets no new name, e\&.g\&. one of a virtual machine, keeps its name, also when a rule gives that to another interface, e\&.g\&. a stale rule of a card that was replaced: the other interface then keeps its own name, and waits only while the add event of the one that has the name is queued or running, or when
+\fBudevd\fR
+has not handled it, e\&.g\&. as it was not triggered\&.
+.PP
+By default, the rule generator replaces
+80\-net\-name\-slot\&.rules, which is not installed, so
+\fInet\&.ifnames=\fR
+on the kernel command line changes nothing\&. When eudev is also built with
+\fB\-\-with\-net\-ifnames\-default=no\fR,
+80\-net\-name\-slot\&.rules
+is installed, and with
+\fInet\&.ifnames=1\fR
+the rule generator records no names: then the interfaces get their predictable names, except the ones that
+70\-persistent\-net\&.rules
+names already, as it comes first\&. The alternative names are assigned as without the rule generator\&.
+\fBudevadm test\fR
+does not run
+\fBwrite_net_rules\fR\&.
+.SH "HARDWARE DATABASE FILES"
+The hwdb files are read from the files located in the system hwdb directory
+/usr/lib/udev/hwdb\&.d, the local administration directory
+/etc/udev/hwdb\&.d, and any other directory in the
+\fBUDEV_HWDB_PATH\fR
+search path variable\&. All hwdb files are collectively sorted and processed in lexical order, regardless of the directories in which they live\&. However, files with identical filenames replace each other\&. Files in
+/etc
+have the highest priority, then files in
+/usr/lib, and the ones in
+\fBUDEV_HWDB_PATH\fR
+come last\&. Files with higher priority take precedence over files with the same name and lower priority\&. This order can be used to override a system\-supplied hwdb file with a local file if needed; a symlink in
+/etc
+with the same name as a hwdb file in
+/usr/lib
+or
+\fBUDEV_HWDB_PATH\fR, pointing to
+/dev/null, or an empty file with that name, disables the hwdb file entirely\&. hwdb files must have the extension
+\&.hwdb; other extensions are ignored\&.
+.PP
+The hwdb file contains data records consisting of matches and associated key\-value pairs\&. Every record in the hwdb starts with one or more match string, specifying a shell glob to compare the database lookup string against\&. Multiple match lines are specified in additional consecutive lines\&. Every match line is compared individually, they are combined by OR\&. Every match line must start at the first character of the line\&.
+.PP
+The match lines are followed by one or more key\-value pair lines, which are recognized by a leading space character\&. The key name and value are separated by
+=\&. An empty line signifies the end of a record\&. Lines beginning with
+#
+are ignored\&.
+.PP
+The content of all hwdb files is read by
+\fBudevadm\fR(8)
+and compiled to a binary database located at
+/etc/udev/hwdb\&.bin, or alternatively
+/usr/lib/udev/hwdb\&.bin, if you want to ship the compiled database in an immutable image by using
+\fB\-\-usr\fR, or anywhere on the system by using
+\fB\-\-output\fR\&. If
+\fBUDEV_HWDB_BIN\fR
+is set at run\-time, and its value identifies a file in the file system, then the binary database located under this name will be used\&. During runtime only the binary database is used\&.
+.SH "SEE ALSO"
+\fBudevd\fR(8),
+\fBudevadm\fR(8)
+.SH "NOTES"
+.IP " 1." 4
+Escape sequences in C
+.RS 4
+\%https://en.wikipedia.org/wiki/Escape_sequences_in_C
+.RE

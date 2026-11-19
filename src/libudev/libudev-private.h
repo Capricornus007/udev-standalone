@@ -1,0 +1,260 @@
+/***
+  This file is part of udev.
+
+  Copyright 2008-2012 Kay Sievers <kay@vrfy.org>
+
+  udev is free software; you can redistribute it and/or modify it
+  under the terms of the GNU Lesser General Public License as published by
+  the Free Software Foundation; either version 2.1 of the License, or
+  (at your option) any later version.
+
+  udev is distributed in the hope that it will be useful, but
+  WITHOUT ANY WARRANTY; without even the implied warranty of
+  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
+  Lesser General Public License for more details.
+
+  You should have received a copy of the GNU Lesser General Public License
+  along with systemd; If not, see <http://www.gnu.org/licenses/>.
+***/
+
+#pragma once
+
+#include <signal.h>
+#include <stdint.h>
+#include <stdbool.h>
+
+#include "libudev.h"
+#include "conf-files.h"
+#include "macro.h"
+#include "util.h"
+#include "log.h"
+#include "utf8.h"
+#include "mkdir.h"
+#include "strxcpyx.h"
+
+/* Like log_device_*() of systemd: the message is prefixed with the sysname of the device and ": ", e.g.
+ * "sda: ", or with nothing if there is no device or it has no sysname. Like there, the error is evaluated
+ * before the sysname is looked up, which may change errno. Unlike there, the sysname is escaped like the values
+ * in the messages, see utf8_escape_for_log(), as the name of e.g. a network interface may contain any byte but
+ * '/', ':' and whitespace; only when the message is logged, and copied only when it has something to escape. */
+#define log_device_full_errno(device, level, error, format, ...)                                        \
+        ({                                                                                              \
+                int _err = (error), _lvl = (level);                                                     \
+                struct udev_device *_dev = (device);                                                    \
+                _cleanup_free_ char *_esc = NULL;                                                       \
+                const char *_sys = _dev && log_get_max_level() >= LOG_PRI(_lvl) ?                       \
+                        utf8_escape_for_log(udev_device_get_sysname(_dev), &_esc) : NULL;               \
+                log_full_errno(_lvl, _err, "%s%s" format, _sys ?: "", _sys ? ": " : "", ##__VA_ARGS__); \
+        })
+#define log_device_full(device, level, ...) log_device_full_errno(device, level, 0, __VA_ARGS__)
+
+#define log_device_debug(device, ...)   log_device_full(device, LOG_DEBUG, __VA_ARGS__)
+#define log_device_info(device, ...)    log_device_full(device, LOG_INFO, __VA_ARGS__)
+#define log_device_notice(device, ...)  log_device_full(device, LOG_NOTICE, __VA_ARGS__)
+#define log_device_warning(device, ...) log_device_full(device, LOG_WARNING, __VA_ARGS__)
+#define log_device_error(device, ...)   log_device_full(device, LOG_ERR, __VA_ARGS__)
+
+#define log_device_debug_errno(device, error, ...)   log_device_full_errno(device, LOG_DEBUG, error, __VA_ARGS__)
+#define log_device_info_errno(device, error, ...)    log_device_full_errno(device, LOG_INFO, error, __VA_ARGS__)
+#define log_device_notice_errno(device, error, ...)  log_device_full_errno(device, LOG_NOTICE, error, __VA_ARGS__)
+#define log_device_warning_errno(device, error, ...) log_device_full_errno(device, LOG_WARNING, error, __VA_ARGS__)
+#define log_device_error_errno(device, error, ...)   log_device_full_errno(device, LOG_ERR, error, __VA_ARGS__)
+
+#define READ_END  0
+#define WRITE_END 1
+
+/* The database version indicates the supported features by the udev database.
+ * This is saved and parsed in V field.
+ *
+ * 0: None of the following features are supported (older eudev, systemd <= 246).
+ * 1: The current tags (Q) and the database version (V) features are implemented.
+ */
+#define LATEST_UDEV_DATABASE_VERSION 1
+
+/* libudev.c */
+int udev_get_rules_path(struct udev *udev, char **path[], usec_t *ts_usec[]);
+int udev_parse_hwdb_format(const char *s);
+unsigned udev_get_children_max(struct udev *udev);
+usec_t udev_get_exec_delay_usec(struct udev *udev);
+usec_t udev_get_event_timeout_usec(struct udev *udev);
+int udev_parse_resolve_names(const char *s, int *ret);
+bool udev_get_resolve_names(struct udev *udev, int *ret);
+char **udev_get_conf_warnings(struct udev *udev);
+void udev_set_conf_warnings_quiet(void);
+int udev_get_timeout_signal(struct udev *udev);
+int udev_get_hwdb_format(struct udev *udev);
+int udev_read_hwdb_format(const char *root);
+void udev_conf_log_search_dirs(const char *root);
+int udev_conf_files(const char *root, ConfFilesFlags flags,
+                    ConfFile **ret_main, char **ret_main_mask, ConfFile ***ret_dropins, size_t *ret_n_dropins);
+bool udev_get_sas_legacy_path(struct udev *udev);
+const char *udev_get_net_naming_scheme(struct udev *udev);
+int udev_get_net_altnames(struct udev *udev);
+const char *udev_get_net_altnames_invalid(struct udev *udev);
+
+/* libudev-device.c */
+int udev_device_read_db(struct udev_device *udev_device);
+struct udev_device *udev_device_new_from_nulstr(struct udev *udev, char *nulstr, ssize_t buflen);
+struct udev_device *udev_device_new_from_resolved_syspath(struct udev *udev, const char *syspath);
+struct udev_device *udev_device_new_from_synthetic_event(struct udev *udev, const char *syspath, const char *action);
+struct udev_device *udev_device_shallow_clone(struct udev_device *old_device);
+struct udev_device *udev_device_clone_with_db(struct udev_device *old_device);
+int udev_device_copy_properties(struct udev_device *dst, struct udev_device *src);
+mode_t udev_device_get_devnode_mode(struct udev_device *udev_device);
+uid_t udev_device_get_devnode_uid(struct udev_device *udev_device);
+gid_t udev_device_get_devnode_gid(struct udev_device *udev_device);
+int udev_device_rename(struct udev_device *udev_device, const char *new_name);
+int udev_device_add_devlink(struct udev_device *udev_device, const char *devlink);
+int udev_device_remove_devlink(struct udev_device *udev_device, const char *devlink);
+void udev_device_cleanup_devlinks_list(struct udev_device *udev_device);
+int udev_device_add_property(struct udev_device *udev_device, const char *key, const char *value);
+char **udev_device_get_properties_envp(struct udev_device *udev_device);
+ssize_t udev_device_get_properties_monitor_buf(struct udev_device *udev_device, const char **buf);
+const char *udev_device_get_devpath_old(struct udev_device *udev_device);
+const char *udev_device_get_id_filename(struct udev_device *udev_device);
+void udev_device_set_is_initialized(struct udev_device *udev_device);
+/* whether a tag of TAG+= or of a database entry is valid: ASCII letters, digits, '-' and '_', not empty */
+bool udev_tag_is_valid(const char *tag) _pure_;
+int udev_device_add_tag(struct udev_device *udev_device, const char *tag, bool both);
+struct udev_list_entry *udev_device_get_current_tags_list_entry_raw(struct udev_device *udev_device);
+void udev_device_remove_tag(struct udev_device *udev_device, const char *tag);
+int udev_device_cleanup_tags(struct udev_device *udev_device, struct udev_device *original);
+usec_t udev_device_get_usec_initialized(struct udev_device *udev_device);
+void udev_device_ensure_usec_initialized(struct udev_device *udev_device, struct udev_device *old_device);
+int udev_device_get_devlink_priority(struct udev_device *udev_device);
+int udev_device_cache_sysattr_value(struct udev_device *udev_device, const char *sysattr, const char *value);
+int udev_device_set_devlink_priority(struct udev_device *udev_device, int prio);
+int udev_device_get_watch_handle(struct udev_device *udev_device);
+int udev_device_set_watch_handle(struct udev_device *udev_device, int handle);
+int udev_device_get_ifindex(struct udev_device *udev_device);
+void udev_device_set_info_loaded(struct udev_device *device);
+bool udev_device_get_db_persist(struct udev_device *udev_device);
+int device_get_driver_subsystem(struct udev_device *udev_device, char **ret);
+const char *udev_device_get_subsystem_without_uevent(struct udev_device *udev_device);
+void udev_device_set_db_persist(struct udev_device *udev_device);
+
+/* libudev-device-private.c */
+int udev_device_update_db(struct udev_device *udev_device);
+int udev_device_delete_db(struct udev_device *udev_device);
+bool udev_device_should_have_db(struct udev_device *udev_device);
+int udev_device_has_db(struct udev_device *udev_device);
+int udev_device_db_is_persistent(struct udev_device *udev_device);
+int udev_device_tag_index(struct udev_device *dev, bool add);
+int udev_device_tag_index_restore(struct udev_device *dev, struct udev_device *old);
+/* Like parse_devnum() of systemd: "MAJOR:MINOR" in decimal, both valid for the kernel. */
+int parse_devnum_id(const char *s, dev_t *ret);
+/* Like sd_device_new_from_devname() of systemd: the device whose device node the path below /dev/, e.g. a
+ * device node symlink, resolves to, or of the number of /dev/block/MAJOR:MINOR or /dev/char/MAJOR:MINOR,
+ * which need not exist. -EINVAL if it is not below /dev/, -ENODEV if it does not exist. */
+int device_new_from_devname(struct udev *udev, const char *devname, struct udev_device **ret);
+/* Like sd_device_new_from_path() of systemd: the device of a path that resolves to a device node below /dev/,
+ * or to a sysfs path; it may also be relative, or a symlink. -ENODEV if it does not exist, or is neither. */
+int device_new_from_path(struct udev *udev, const char *path, struct udev_device **ret);
+int device_get_sysattr_value(struct udev_device *device, const char *sysattr, const char **ret);
+bool sysattr_string_is_safe(const char *p);
+int device_get_sysattr_safe_string(struct udev_device *device, const char *sysattr, const char **ret);
+int device_get_sysattr_int(struct udev_device *device, const char *sysattr, int *ret);
+int device_get_sysattr_unsigned_full(struct udev_device *device, const char *sysattr, unsigned base, unsigned *ret);
+static inline int device_get_sysattr_unsigned(struct udev_device *device, const char *sysattr, unsigned *ret) {
+        return device_get_sysattr_unsigned_full(device, sysattr, 0, ret);
+}
+int device_get_sysattr_u16_full(struct udev_device *device, const char *sysattr, unsigned base, uint16_t *ret);
+int device_get_sysattr_bool(struct udev_device *device, const char *sysattr);
+int device_get_sysattr_u64(struct udev_device *device, const char *sysattr, uint64_t *ret);
+/* Like device_property_can_set() of systemd: false for the properties that describe the device and the event,
+ * which the rules cannot set */
+bool device_property_can_set(const char *property) _pure_;
+bool syspath_sends_uevents(const char *syspath);
+uint64_t uevent_seqnum(void);
+bool uevent_seqnum_unchanged(uint64_t before, uint64_t after);
+/* Like sd_device_trigger_with_args() of systemd 66563e97b7, with the UUID of ID128_UUID_STRING_MAX bytes in ret_uuid */
+int uevent_trigger_with_args(struct udev *udev, const char *syspath, const char *action, char * const *args,
+                             char *ret_uuid);
+int device_trigger_with_args(struct udev_device *device, const char *action, char * const *args, char *ret_uuid);
+/* Whether the kernel supports UUIDs of synthetic uevents: 1 yes, 0 no, -1 not known (yet) */
+int uevent_trigger_uuid_supported(void);
+int uevent_trigger_share_uuid_supported(void);
+int device_build_default_trigger_args(bool with_timestamp, char ***ret);
+int device_trigger_with_timestamp(struct udev_device *device, const char *action, char * const *args,
+                                  char *ret_uuid);
+int device_get_sysnum_unsigned(struct udev_device *device, unsigned *ret);
+
+/* libudev-monitor.c - netlink/unix socket communication  */
+int udev_monitor_disconnect(struct udev_monitor *udev_monitor);
+int udev_monitor_allow_unicast_sender(struct udev_monitor *udev_monitor, struct udev_monitor *sender);
+int udev_monitor_send_device(struct udev_monitor *udev_monitor,
+                             struct udev_monitor *destination, struct udev_device *udev_device);
+struct udev_monitor *udev_monitor_new_from_netlink_fd(struct udev *udev, const char *name, int fd);
+
+/* libudev-list.c */
+struct udev_list_node {
+        struct udev_list_node *next, *prev;
+};
+struct udev_list {
+        struct udev *udev;
+        struct udev_list_node node;
+        struct udev_list_entry **entries;
+        unsigned int entries_cur;
+        unsigned int entries_max;
+        bool unique;
+        bool insertion_order;   /* a unique list in the order of insertion, not sorted */
+};
+#define UDEV_LIST(list) struct udev_list_node list = { &(list), &(list) }
+void udev_list_node_init(struct udev_list_node *list);
+int udev_list_node_is_empty(struct udev_list_node *list);
+void udev_list_node_append(struct udev_list_node *new, struct udev_list_node *list);
+void udev_list_node_remove(struct udev_list_node *entry);
+#define udev_list_node_foreach(node, list) \
+        for (node = (list)->next; \
+             node != list; \
+             node = (node)->next)
+#define udev_list_node_foreach_safe(node, tmp, list) \
+        for (node = (list)->next, tmp = (node)->next; \
+             node != list; \
+             node = tmp, tmp = (tmp)->next)
+void udev_list_init(struct udev *udev, struct udev_list *list, bool unique);
+void udev_list_init_ordered(struct udev *udev, struct udev_list *list);
+void udev_list_cleanup(struct udev_list *list);
+struct udev_list_entry *udev_list_get_entry(struct udev_list *list);
+struct udev_list_entry *udev_list_entry_add(struct udev_list *list, const char *name, const char *value);
+void udev_list_entry_delete(struct udev_list_entry *entry);
+int udev_list_entry_get_num(struct udev_list_entry *list_entry);
+void udev_list_entry_set_num(struct udev_list_entry *list_entry, int num);
+#define udev_list_entry_foreach_safe(entry, tmp, first) \
+        for (entry = first, tmp = udev_list_entry_get_next(entry); \
+             entry != NULL; \
+             entry = tmp, tmp = udev_list_entry_get_next(tmp))
+
+/* libudev-queue.c */
+unsigned long long int udev_get_kernel_seqnum(struct udev *udev);
+int udev_queue_read_seqnum(FILE *queue_file, unsigned long long int *seqnum);
+ssize_t udev_queue_read_devpath(FILE *queue_file, char *devpath, size_t size);
+ssize_t udev_queue_skip_devpath(FILE *queue_file);
+
+/* libudev-queue-private.c */
+struct udev_queue_export *udev_queue_export_new(struct udev *udev);
+struct udev_queue_export *udev_queue_export_unref(struct udev_queue_export *udev_queue_export);
+void udev_queue_export_cleanup(struct udev_queue_export *udev_queue_export);
+int udev_queue_export_device_queued(struct udev_queue_export *udev_queue_export, struct udev_device *udev_device);
+int udev_queue_export_device_finished(struct udev_queue_export *udev_queue_export, struct udev_device *udev_device);
+
+/* libudev-hwdb.c */
+bool udev_hwdb_validate(struct udev_hwdb *hwdb);
+struct udev_hwdb *udev_hwdb_new_from_path(struct udev *udev, const char *path);
+
+/* libudev-util.c */
+#define UTIL_PATH_SIZE                      1024
+#define UTIL_NAME_SIZE                       512
+#define UTIL_LINE_SIZE                     16384
+#define UDEV_ALLOWED_CHARS_INPUT        "/ $%?,"
+ssize_t util_get_sys_core_link_value(struct udev *udev, const char *slink, const char *syspath, char *value, size_t size);
+int util_log_priority(const char *priority);
+void util_remove_trailing_chars(char *path, char c);
+int util_replace_whitespace(const char *str, char *to, size_t len);
+int util_replace_chars(char *str, const char *white);
+unsigned int util_string_hash32(const char *key);
+uint64_t util_string_bloom64(const char *str);
+
+/* libudev-util-private.c */
+int util_resolve_subsys_kernel(struct udev *udev, const char *string, char *result, size_t maxsize);
+int util_resolve_subsys_kernel_value(struct udev *udev, const char *string, char **ret_value);

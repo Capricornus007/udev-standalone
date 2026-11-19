@@ -1,2 +1,0 @@
-# disk devices go to group 'disk'
-SUBSYSTEM=="block", GROUP="disk", MODE="0660"

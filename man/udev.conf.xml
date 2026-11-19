@@ -1,0 +1,360 @@
+<?xml version='1.0'?>
+<?xml-stylesheet type="text/xsl" href="http://docbook.sourceforge.net/release/xsl/current/xhtml/docbook.xsl"?>
+<!DOCTYPE refentry PUBLIC "-//OASIS//DTD DocBook XML V4.2//EN"
+  "http://www.oasis-open.org/docbook/xml/4.2/docbookx.dtd">
+
+<!--
+  This file is part of eudev, forked from systemd.
+
+  Copyright 2014 Zbigniew Jędrzejewski-Szmek
+
+  systemd is free software; you can redistribute it and/or modify it
+  under the terms of the GNU Lesser General Public License as published by
+  the Free Software Foundation; either version 2.1 of the License, or
+  (at your option) any later version.
+
+  systemd is distributed in the hope that it will be useful, but
+  WITHOUT ANY WARRANTY; without even the implied warranty of
+  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
+  Lesser General Public License for more details.
+
+  You should have received a copy of the GNU Lesser General Public License
+  along with systemd; If not, see <http://www.gnu.org/licenses/>.
+-->
+
+<refentry id="udev.conf"
+          xmlns:xi="http://www.w3.org/2001/XInclude">
+
+  <refentryinfo>
+    <title>udev.conf</title>
+    <productname>eudev</productname>
+    <authorgroup>
+      <author>
+        <contrib>Developer</contrib>
+        <firstname>Kay</firstname>
+        <surname>Sievers</surname>
+        <email>kay@vrfy.org</email>
+      </author>
+    </authorgroup>
+  </refentryinfo>
+
+  <refmeta>
+    <refentrytitle>udev.conf</refentrytitle>
+    <manvolnum>5</manvolnum>
+  </refmeta>
+
+  <refnamediv>
+    <refname>udev.conf</refname>
+    <refname>udev.conf.d</refname>
+    <refpurpose>Configuration for device event managing daemon</refpurpose>
+  </refnamediv>
+
+  <refsynopsisdiv>
+    <para>
+      <simplelist>
+        <member><filename>/etc/udev/udev.conf</filename></member>
+        <member><filename>/run/udev/udev.conf</filename></member>
+        <member><filename>/usr/local/lib/udev/udev.conf</filename></member>
+        <member><filename>/usr/lib/udev/udev.conf</filename></member>
+        <member><filename>/etc/udev/udev.conf.d/*.conf</filename></member>
+        <member><filename>/run/udev/udev.conf.d/*.conf</filename></member>
+        <member><filename>/usr/local/lib/udev/udev.conf.d/*.conf</filename></member>
+        <member><filename>/usr/lib/udev/udev.conf.d/*.conf</filename></member>
+      </simplelist>
+    </para>
+  </refsynopsisdiv>
+
+  <refsect1>
+    <title>Description</title>
+
+    <para>These files contain configuration options for
+      <citerefentry><refentrytitle>udevd</refentrytitle><manvolnum>8</manvolnum></citerefentry>.
+      The syntax of these files is very simple: a list
+      of assignments, one per line.
+      All empty lines or lines beginning with <literal>#</literal> are
+      ignored.
+    </para>
+    <para>
+      The main configuration file is the first <filename>udev.conf</filename>
+      found in <filename>/etc/udev</filename>, <filename>/run/udev</filename>,
+      <filename>/usr/local/lib/udev</filename>
+      and <filename>/usr/lib/udev</filename> (or <filename>/lib/udev</filename>,
+      depending on the build, and both when built with
+      <option>--enable-split-usr</option>), in
+      this order. The drop-ins, the files
+      with the extension <filename>.conf</filename> in the
+      <filename>udev.conf.d</filename> subdirectories of these directories, are
+      read after it, sorted by their names, regardless of the directories in
+      which they live. A setting overrides the same setting in the files read
+      before. A drop-in replaces the drop-ins with the same name in the
+      directories listed after its own: one in <filename>/etc</filename>
+      replaces those in <filename>/run</filename>,
+      <filename>/usr/local/lib</filename> and <filename>/usr/lib</filename>;
+      a symlink to <filename>/dev/null</filename>
+      or an empty file disables them. Files that are not regular files are
+      ignored. A program that uses libudev, like <command>udevd</command> and
+      <command>udevadm</command>, reads the files once, when it creates its
+      first libudev context, and again for the next context only when they
+      could not be read completely, e.g. when a file could not be opened.
+    </para>
+    <para>
+      The following options can be set:
+    </para>
+
+    <variablelist>
+      <varlistentry>
+        <term><varname>udev_log</varname></term>
+
+        <listitem>
+          <para>The log level. Valid values are the numerical
+          syslog priorities or their textual representations:
+          <option>err</option>, <option>info</option> and
+          <option>debug</option>.</para>
+
+          <note>
+            <para>This option is also honored by
+                <citerefentry><refentrytitle>udevadm</refentrytitle><manvolnum>8</manvolnum></citerefentry>.
+            </para>
+          </note>
+        </listitem>
+      </varlistentry>
+
+      <varlistentry>
+        <term><varname>children_max</varname></term>
+
+        <listitem>
+          <para>An integer. The maximum number of events executed in parallel.
+          When unspecified or 0 is specified, the maximum is determined based
+          on the system resources:
+          <literal>MIN(2 × CPUs + 16, MAX(RAM / 128 MiB, 10), 2048)</literal>,
+          where <literal>CPUs</literal> is the number of CPUs
+          <command>udevd</command> may run on, according to its CPU affinity,
+          and <literal>RAM</literal> the size of the physical memory, or the
+          memory limit of the cgroup of PID 1 when it is smaller:
+          <varname>memory.max</varname> with cgroup v2, or
+          <varname>memory.limit_in_bytes</varname> in the hierarchy of the
+          memory controller with cgroup v1.</para>
+
+          <para>This is the same as the <option>--children-max=</option> option of
+          <citerefentry><refentrytitle>udevd</refentrytitle><manvolnum>8</manvolnum></citerefentry>.</para>
+        </listitem>
+      </varlistentry>
+
+      <varlistentry>
+        <term><varname>exec_delay</varname></term>
+
+        <listitem>
+          <para>Delay the execution of <varname>RUN</varname>
+          instructions by the given number of seconds, or by a time span
+          with a unit, e.g. <literal>500ms</literal>. This option
+          might be useful when debugging system crashes during
+          coldplug caused by loading non-working kernel
+          modules. 0 means no delay, and a delay that is not shorter than the
+          event timeout is ignored.</para>
+
+          <para>This is the same as the <option>--exec-delay=</option> option of
+          <citerefentry><refentrytitle>udevd</refentrytitle><manvolnum>8</manvolnum></citerefentry>.</para>
+        </listitem>
+      </varlistentry>
+
+      <varlistentry>
+        <term><varname>event_timeout</varname></term>
+
+        <listitem>
+          <para>The number of seconds to wait for events to finish, or a time
+          span with a unit, e.g. <literal>5min</literal>. After this time, the
+          event will be terminated. The default is 180 seconds, which is also
+          used when 0 or less than a millisecond is given.</para>
+
+          <para>This is the same as the <option>--event-timeout=</option> option of
+          <citerefentry><refentrytitle>udevd</refentrytitle><manvolnum>8</manvolnum></citerefentry>.</para>
+        </listitem>
+      </varlistentry>
+
+      <varlistentry>
+        <term><varname>resolve_names</varname></term>
+
+        <listitem>
+          <para>Specifies when <command>udevd</command> should resolve names of
+          users and groups. When set to <option>early</option> (the default),
+          names will be resolved when the rules are parsed. When set to
+          <option>late</option>, names will be resolved for every event. When
+          set to <option>never</option>, names will never be resolved, and the
+          <varname>OWNER</varname> and <varname>GROUP</varname> keys whose value
+          is not a numeric ID, i.e. a name or a value with substitutions, will be
+          ignored; the other keys of these rules still apply.</para>
+
+          <para>This is the same as the <option>--resolve-names=</option> option of
+          <citerefentry><refentrytitle>udevd</refentrytitle><manvolnum>8</manvolnum></citerefentry>.</para>
+        </listitem>
+      </varlistentry>
+
+      <varlistentry>
+        <term><varname>hwdb_format</varname></term>
+
+        <listitem>
+          <para>The format of the compiled hardware database
+          <filename>hwdb.bin</filename> created by <command>udevadm hwdb
+          --update</command>. Valid values are <option>1</option> and
+          <option>2</option>, invalid values are ignored with a warning.
+          Defaults to <option>1</option>.</para>
+
+          <para>Format <option>1</option> is the compatible format, which can
+          be read by all versions of libudev. When a device matches multiple
+          entries of the hardware database which set the same property, it is
+          undefined which of the values is used.</para>
+
+          <para>Format <option>2</option> additionally stores the origin (the
+          source file and the line number) of every property, so that for the
+          same property the value from a later file or a later line takes
+          precedence. This format can only be read by libudev from this
+          release or newer: older versions of libudev, including an old
+          <command>udevd</command> which was not restarted after an upgrade,
+          misread such a database.</para>
+
+          <para>When <command>udevadm hwdb --update</command> is used with
+          <option>--root=</option>, the value is taken from
+          <filename>udev.conf</filename> below the specified root directory
+          instead, and defaults to <option>1</option> if it is not set
+          there.</para>
+        </listitem>
+      </varlistentry>
+
+      <varlistentry>
+        <term><varname>sas_legacy_path</varname></term>
+
+        <listitem>
+          <para>Takes a boolean argument (<option>yes</option>,
+          <option>true</option>, <option>1</option> or <option>no</option>,
+          <option>false</option>, <option>0</option>). Defaults to
+          <option>no</option>. Selects how the <command>path_id</command>
+          builtin composes the SAS part of <varname>ID_PATH</varname>, and
+          thus the <filename>/dev/disk/by-path/</filename> links, of devices
+          behind a SAS port whose <filename>num_phys</filename> attribute is
+          not <literal>1</literal>.</para>
+
+          <para>By default only ports with two or more phys are treated as
+          wide ports and named after the SAS address of the end device:
+          <literal>sas-<replaceable>0xADDRESS</replaceable>-lun-<replaceable>N</replaceable></literal>.
+          Ports reporting zero phys, as done e.g. by the smartpqi driver,
+          are named like single phy ports after the phy they are connected
+          to: <literal>sas-phy<replaceable>PHY</replaceable>-lun-<replaceable>N</replaceable></literal>,
+          or <literal>sas-exp<replaceable>0xADDRESS</replaceable>-phy<replaceable>PHY</replaceable>-lun-<replaceable>N</replaceable></literal>
+          when connected through an expander. If <filename>num_phys</filename>
+          cannot be parsed, no <varname>ID_PATH</varname> is set.</para>
+
+          <para>If set to <option>yes</option>, the naming of older eudev
+          versions is used: every port with a <filename>num_phys</filename>
+          other than <literal>1</literal>, including <literal>0</literal> and
+          unparsable values, is treated as a wide port and named
+          <literal>sas-<replaceable>0xADDRESS</replaceable>-lun-<replaceable>N</replaceable></literal>.
+          This keeps existing by-path links of such controllers stable. The
+          file is only read when <command>udevd</command> starts, and the
+          links of already present devices are updated only when their
+          events are processed again, e.g. by
+          <command>udevadm trigger</command>.</para>
+        </listitem>
+      </varlistentry>
+
+      <varlistentry>
+        <term><varname>net_altnames</varname></term>
+
+        <listitem>
+          <para>Takes a boolean argument. Defaults to <option>yes</option>.
+          When set to <option>no</option>, <varname>OPTIONS+="net_altnames"</varname>
+          is ignored, i.e. no alternative names are assigned to network
+          interfaces, which <filename>80-net-altnames.rules</filename> requests
+          by default, or, when eudev is built with
+          <option>--with-net-ifnames-default=no</option>, only with
+          <varname>net.ifnames=1</varname> on the kernel command line (see
+          <citerefentry><refentrytitle>udev</refentrytitle><manvolnum>7</manvolnum></citerefentry>).
+          An invalid or empty value is ignored, with a warning whenever the
+          configuration is read: when <command>udevd</command> starts, and by
+          <command>udevadm test</command>. <command>udevd</command> only reads
+          the file when it starts, and alternative names are only assigned
+          when an interface is added.</para>
+        </listitem>
+      </varlistentry>
+
+      <varlistentry>
+        <term><varname>net_naming_scheme</varname></term>
+
+        <listitem>
+          <para>Selects the naming scheme used by the <command>net_id</command>
+          builtin to generate the predictable names of network interfaces:
+          <literal>eudev</literal> for the names generated by the
+          <command>net_id</command> builtin of eudev 3.2.15 and older, one of
+          the schemes of systemd, e.g. <literal>v255</literal>,
+          or <literal>latest</literal>, the default. The schemes are described
+          in <citerefentry><refentrytitle>udev</refentrytitle><manvolnum>7</manvolnum></citerefentry>.
+          Setting it keeps these names stable when a new version adds a new
+          scheme. It does not select the rules that choose the name an
+          interface is renamed to, which are the same with all schemes, e.g.
+          the name from the hwdb is preferred, and interfaces named by
+          userspace or predictably by the kernel are not renamed, also with
+          <literal>eudev</literal>. <varname>net.naming_scheme=</varname>
+          on the kernel command line and the
+          <varname>$NET_NAMING_SCHEME</varname> environment variable of
+          <command>udevd</command>, unless its value starts with
+          <literal>:</literal>, take precedence (see
+          <citerefentry><refentrytitle>udevd</refentrytitle><manvolnum>8</manvolnum></citerefentry>).
+          Unknown names are ignored with a warning, and the next setting in
+          that order is used. The file is only read when
+          <command>udevd</command> starts, and interfaces are renamed only
+          when they are added, so a change takes effect at the next boot; also
+          rebuild the initrd if it starts <command>udevd</command>.</para>
+        </listitem>
+      </varlistentry>
+      <varlistentry>
+        <term><varname>timeout_signal</varname></term>
+
+        <listitem>
+          <para>Specifies a signal that <command>udevd</command> will send on worker
+          timeouts. Note that both workers and spawned processes will be killed using this
+          signal. Defaults to <option>SIGKILL</option>. This is the same as the
+          <option>--timeout-signal=</option> option of
+          <citerefentry><refentrytitle>udevd</refentrytitle><manvolnum>8</manvolnum></citerefentry>.
+          An invalid value is ignored, with a warning when <command>udevd</command>
+          starts. This includes the signals whose default action does not
+          terminate a process, with which the timeout would not stop anything:
+          <constant>SIGCHLD</constant>, <constant>SIGCONT</constant>,
+          <constant>SIGSTOP</constant>, <constant>SIGTSTP</constant>,
+          <constant>SIGTTIN</constant>, <constant>SIGTTOU</constant>,
+          <constant>SIGURG</constant> and <constant>SIGWINCH</constant>.
+          A worker that has not finished its event 5 seconds after the signal
+          is killed with <constant>SIGKILL</constant>; after a signal whose
+          default action dumps core, e.g. <constant>SIGABRT</constant>, 90
+          seconds, so that the core dump is not cut off.</para>
+        </listitem>
+      </varlistentry>
+    </variablelist>
+
+    <para>
+      In addition, <filename>udevd</filename> can be configured
+      by command-line options and the kernel command line (see
+      <citerefentry><refentrytitle>udevd</refentrytitle><manvolnum>8</manvolnum></citerefentry>).
+      The command-line options take precedence over the settings in this file,
+      the options on the kernel command line take precedence over both, and
+      for the maximum number of workers,
+      <command>udevadm control --children-max=</command> over all of them.
+      For <varname>children_max</varname>, <varname>exec_delay</varname> and
+      <varname>event_timeout</varname>, 0 counts as not set, so e.g.
+      <varname>udev.children_max=0</varname> on the kernel command line does not
+      override <varname>children_max=4</varname> in this file.
+      Invalid values of <varname>children_max</varname>,
+      <varname>exec_delay</varname>, <varname>event_timeout</varname> and
+      <varname>resolve_names</varname> are ignored, with a warning when
+      <command>udevd</command> starts. The files are only read when
+      <command>udevd</command> starts.
+    </para>
+  </refsect1>
+
+  <refsect1>
+    <title>See Also</title>
+    <para>
+      <citerefentry><refentrytitle>udevd</refentrytitle><manvolnum>8</manvolnum></citerefentry>,
+      <citerefentry><refentrytitle>udev</refentrytitle><manvolnum>7</manvolnum></citerefentry>,
+      <citerefentry><refentrytitle>udevadm</refentrytitle><manvolnum>8</manvolnum></citerefentry>
+    </para>
+  </refsect1>
+</refentry>

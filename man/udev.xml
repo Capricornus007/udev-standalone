@@ -1,0 +1,1992 @@
+<?xml version='1.0'?> <!--*- Mode: nxml; nxml-child-indent: 2; indent-tabs-mode: nil -*-->
+<?xml-stylesheet type="text/xsl" href="http://docbook.sourceforge.net/release/xsl/current/xhtml/docbook.xsl"?>
+<!DOCTYPE refentry PUBLIC "-//OASIS//DTD DocBook XML V4.2//EN"
+  "http://www.oasis-open.org/docbook/xml/4.2/docbookx.dtd">
+
+<refentry id="udev">
+  <refentryinfo>
+    <title>udev</title>
+    <productname>udev</productname>
+    <authorgroup>
+      <author>
+        <contrib>Developer</contrib>
+        <firstname>Greg</firstname>
+        <surname>Kroah-Hartmann</surname>
+        <email>greg@kroah.com</email>
+      </author>
+      <author>
+        <contrib>Developer</contrib>
+        <firstname>Kay</firstname>
+        <surname>Sievers</surname>
+        <email>kay@vrfy.org</email>
+      </author>
+    </authorgroup>
+  </refentryinfo>
+
+  <refmeta>
+    <refentrytitle>udev</refentrytitle>
+    <manvolnum>7</manvolnum>
+  </refmeta>
+
+  <refnamediv>
+    <refname>udev</refname>
+    <refpurpose>Dynamic device management</refpurpose>
+  </refnamediv>
+
+  <refsect1><title>Description</title>
+    <para>udev supplies the system software with device events, manages permissions
+    of device nodes, may create additional symlinks in the <filename>/dev</filename>
+    directory and may rename network interfaces. The kernel usually just assigns unpredictable
+    device names based on the order of discovery. Meaningful symlinks or network device
+    names provide a way to reliably identify devices based on their properties or
+    current configuration.</para>
+
+    <para>The udev daemon, <citerefentry><refentrytitle>udevd</refentrytitle>
+    <manvolnum>8</manvolnum></citerefentry>, receives device uevents directly from
+    the kernel whenever a device is added or removed from the system, or it changes its
+    state. When udev receives a device event, it matches its configured set of rules
+    against various device attributes to identify the device. Rules that match may
+    provide additional device information to be stored in the udev database or
+    to be used to create meaningful symlink names.</para>
+
+    <para>All device information udev processes is stored in the udev database and
+    sent out to possible event subscribers. Access to all stored data and the event
+    sources is provided by the library libudev.</para>
+
+    <para><command>udevd</command> processes an event only after the earlier events of the same
+    device, of its parent devices and of its children have finished, but the events of other devices,
+    also of its siblings, in parallel. So an event that the kernel sends last need not finish last.
+    For example, the kernel creates the control device of a sound card
+    (<filename>controlC<replaceable>N</replaceable></filename>) after all other devices of the card,
+    but the events of other children of the card may still be in progress when the event of the
+    control device has finished. Therefore <filename>78-sound-card.rules</filename> triggers a
+    <literal>change</literal> event of the card from the event of its control device: as the event of
+    their parent, it starts only after all earlier events of the card's children, and it sets
+    <varname>SOUND_INITIALIZED=1</varname>; this event is the point at which the card is ready.
+    <command>udevadm trigger --settle</command> does not wait for it, as it waits only for the events
+    that it triggered itself, not for events that rules trigger in response. And <command>udevadm
+    trigger</command> with its default action <literal>change</literal> triggers the card itself too:
+    its own <literal>change</literal> event runs first, before the events of its children of the same
+    call, and also sets <varname>SOUND_INITIALIZED=1</varname>, and the event triggered by its control
+    device follows, so the card gets two such events. See
+    <citerefentry><refentrytitle>udevadm</refentrytitle><manvolnum>8</manvolnum></citerefentry>.</para>
+  </refsect1>
+
+  <refsect1><title>Rules Files</title>
+      <para>The udev rules are read from the files located in the system rules
+      directories <filename>/lib/udev/rules.d</filename> (additionally
+      <filename>/usr/lib/udev/rules.d</filename> when built with <option>--enable-split-usr</option>)
+      and <filename>/usr/local/lib/udev/rules.d</filename>,
+      the volatile runtime directory <filename>/run/udev/rules.d</filename>
+      and the local administration directory <filename>/etc/udev/rules.d</filename>.
+      All rules files are collectively sorted and processed in lexical order,
+      regardless of the directories in which they live. However, files with
+      identical filenames replace each other. Files in <filename>/etc</filename>
+      have the highest priority, files in <filename>/run</filename> take precedence
+      over files with the same name in <filename>/usr/local/lib</filename>, and
+      these over files with the same name in <filename>/lib</filename> (or
+      <filename>/usr/lib</filename>). This can be
+      used to override a system-supplied rules file with a local file if needed;
+      a symlink in <filename>/etc</filename> with the same name as a rules file in
+      <filename>/lib</filename>, pointing to <filename>/dev/null</filename>,
+      or an empty file with that name, disables the rules file entirely. Rule files must have the extension
+      <filename>.rules</filename>; other extensions are ignored.</para>
+
+      <para>Every line in the rules file contains at least one key-value pair.
+      Except for empty lines or lines beginning with <literal>#</literal>, which are ignored.
+      There are two kinds of keys: match and assignment.
+      If all match keys match against their values, the rule gets applied and the
+      assignment keys get the specified values assigned.</para>
+
+      <para>A line that ends with a backslash (<literal>\</literal>) is continued on the
+      next line: the backslash is removed, and the next line is appended without its
+      leading whitespace. Lines beginning with <literal>#</literal> are ignored also
+      between the lines of a continued rule. A rule that is still continued at the end of
+      the file, or that is longer than 16383 characters, is ignored with an error message;
+      the other rules of the file are still read. The messages about a rule name the rules
+      file and the first line of the rule.</para>
+
+      <para>A matching rule may rename a network interface, add symlinks
+      pointing to the device node, or run a specified program as part of
+      the event handling. Like in systemd, <varname>NAME</varname> is ignored with a
+      warning for a device that is not a network interface, also for one with a device node,
+      and <varname>SYMLINK</varname> is ignored for a device without a device node; the
+      other keys of the rule line still apply. <varname>OWNER</varname>,
+      <varname>GROUP</varname> and <varname>MODE</varname> have no effect on such a
+      device.</para>
+
+      <para>Like in systemd, a rule line is not evaluated at all when it cannot do anything
+      for the event: when it has no assignment, <varname>GOTO</varname> (with its
+      <varname>LABEL</varname>), <varname>PROGRAM</varname> or <varname>IMPORT</varname> key,
+      or when its only assignments are <varname>NAME</varname>, and the device is not a
+      network interface, or <varname>SYMLINK</varname>, <varname>OWNER</varname>,
+      <varname>GROUP</varname> or <varname>MODE</varname>, and the device has no device
+      node, or only any of these keys on a remove event. Its match keys are not evaluated then,
+      so their errors that otherwise stop the processing of the event, e.g. of
+      <varname>TEST</varname> or <varname>SYSCTL{}</varname>, do not happen, and
+      <command>udevadm test</command> does not show the line.
+      <command>udevadm verify</command> reports a rule line that has none of these keys as
+      having no effect.</para>
+
+      <para>A rule consists of a comma-separated list of one or more key-value pairs.
+      Each key has a distinct operation, depending on the used operator. Some keys take
+      an attribute in braces right after the key name, like
+      <varname>ATTR{<replaceable>filename</replaceable>}</varname>; the attribute may
+      contain any character except <literal>}</literal>, also whitespace. A rule line
+      with a key-value pair that cannot be parsed, e.g. with a value that is not quoted,
+      or with an unknown key, an attribute or an operator the key does not take, a missing or
+      empty attribute, an unknown built-in
+      command, or an unknown type of <varname>IMPORT{}</varname> or <varname>RUN{}</varname>,
+      is ignored as a whole, and an error message says so. Valid operators are:</para>
+      <variablelist>
+        <varlistentry>
+          <term><literal>==</literal></term>
+          <listitem>
+            <para>Compare for equality.</para>
+          </listitem>
+        </varlistentry>
+
+        <varlistentry>
+          <term><literal>!=</literal></term>
+          <listitem>
+            <para>Compare for inequality.</para>
+          </listitem>
+        </varlistentry>
+
+        <varlistentry>
+          <term><literal>=</literal></term>
+          <listitem>
+            <para>Assign a value to a key. Keys that represent a list are reset
+            and only this single value is assigned.</para>
+          </listitem>
+        </varlistentry>
+
+        <varlistentry>
+          <term><literal>+=</literal></term>
+          <listitem>
+            <para>Add the value to a key that holds a list of entries.</para>
+          </listitem>
+        </varlistentry>
+
+        <varlistentry>
+          <term><literal>-=</literal></term>
+          <listitem>
+            <para>Remove the value from a key that holds a list of entries.</para>
+          </listitem>
+        </varlistentry>
+
+        <varlistentry>
+          <term><literal>:=</literal></term>
+          <listitem>
+            <para>Assign  a  value  to  a key finally; disallow any later changes.</para>
+          </listitem>
+        </varlistentry>
+      </variablelist>
+
+      <para>Values are written as double quoted strings, such as ("string").
+      To include a quotation mark (") in the value, precede it by a backslash (\").
+      Any other occurrences of a backslash followed by a character are not unescaped.
+      That is, "\t\n" is treated as four characters:
+      backslash, lowercase t, backslash, lowercase n.</para>
+
+      <para>The string can be prefixed with a lowercase e (e"string\n") to mark the string as
+      C-style escaped, see
+      <ulink url="https://en.wikipedia.org/wiki/Escape_sequences_in_C">Escape sequences in C</ulink>.
+      For example, e"string\n" is parsed as 7 characters: 6 lowercase letters and a newline.
+      This can be useful for writing special characters when a kernel driver requires them.</para>
+
+      <para>The string can be prefixed with a lowercase i (i"string") to mark that the string or pattern
+      will match case-insensitively. For example, i"foo" will match
+      <literal>foo</literal>, <literal>FOO</literal>, <literal>FoO</literal> and so on. The prefix can be
+      used only for match (<literal>==</literal>) or unmatch (<literal>!=</literal>) rules, e.g.
+      <varname>ATTR{foo}==i"abcd"</varname>.</para>
+
+      <para>Please note that <constant>NUL</constant> is not allowed in either string variant.</para>
+
+      <para>The keys of a rule line are not evaluated in the order in which they are written, but,
+      like in systemd, in a fixed order by their kind: all match keys before all assignment keys,
+      and within these as listed below. Keys of the same kind are evaluated in the order in which
+      they are written, and the evaluation stops at the first match key that does not match. So a
+      key cannot use the result of a key of the same line that comes later in this order: e.g. an
+      <varname>ENV{}</varname> match does not see the properties that an
+      <varname>IMPORT</varname> of the same line imports, and
+      <literal>OWNER="$env{X}"</literal> or <literal>TAG+="$env{X}"</literal> does not see the
+      value that <literal>ENV{X}=</literal> of the same line assigns; such keys must be written
+      on separate lines. The order is:</para>
+      <orderedlist>
+        <listitem><para><varname>ACTION</varname>, <varname>DEVPATH</varname>,
+        <varname>KERNEL</varname>, <varname>SYMLINK</varname>, <varname>NAME</varname>,
+        <varname>ENV{}</varname>, <varname>TAG</varname>, <varname>SUBSYSTEM</varname>,
+        <varname>DRIVER</varname>, <varname>ATTR{}</varname> and <varname>SYSCTL{}</varname>
+        as match keys;</para></listitem>
+        <listitem><para><varname>KERNELS</varname>, <varname>SUBSYSTEMS</varname>,
+        <varname>DRIVERS</varname>, <varname>ATTRS{}</varname> and <varname>TAGS</varname>,
+        which are checked together, against the device and then against one parent device after
+        the other;</para></listitem>
+        <listitem><para><varname>TEST</varname>, <varname>PROGRAM</varname>,
+        <varname>IMPORT{file}</varname>, <varname>IMPORT{program}</varname>,
+        <varname>IMPORT{builtin}</varname> (also an <varname>IMPORT{program}</varname> that
+        names a built-in command), <varname>IMPORT{db}</varname>,
+        <varname>IMPORT{cmdline}</varname>, <varname>IMPORT{parent}</varname> and
+        <varname>RESULT</varname>;</para></listitem>
+        <listitem><para>the <varname>OPTIONS</varname> <option>dump</option> and
+        <option>dump-json</option>, <option>string_escape=none</option>,
+        <option>string_escape=replace</option>, <option>db_persist</option>,
+        <option>net_altnames</option>, <option>watch</option> and <option>nowatch</option>,
+        <option>link_priority=</option> and <option>log_level=</option>;</para></listitem>
+        <listitem><para><varname>OWNER</varname>, <varname>GROUP</varname> and
+        <varname>MODE</varname>, first the ones whose value is resolved only when the rule is
+        applied (see below), then the others;</para></listitem>
+        <listitem><para><varname>TAG</varname>, <varname>SECLABEL{}</varname>,
+        <varname>ENV{}</varname>, <varname>NAME</varname>, <varname>SYMLINK</varname>,
+        <varname>ATTR{}</varname> and <varname>SYSCTL{}</varname> as assignment
+        keys;</para></listitem>
+        <listitem><para><varname>RUN{builtin}</varname>, then <varname>RUN{program}</varname>;
+        </para></listitem>
+        <listitem><para><varname>GOTO</varname>.</para></listitem>
+      </orderedlist>
+
+      <para>Rules written for systemd-udevd may use features which udev does not provide: the
+      <varname>CONST{arch}</varname>, <varname>CONST{virt}</varname> and
+      <varname>CONST{cvm}</varname> match keys, and the <literal>dissect_image</literal>,
+      <literal>net_setup_link</literal> and <literal>uaccess</literal> built-in commands. A rule
+      line using one of them is ignored as a whole, with an error message saying so.</para>
+
+      <para>The following key names can be used to match against device properties.
+      Some of the keys also match against properties of the parent devices in sysfs,
+      not only the device that has generated the event. If multiple keys that match
+      a parent device are specified in a single rule, all these keys must match at
+      one and the same parent device.</para>
+      <variablelist class='udev-directives'>
+        <varlistentry>
+          <term><varname>ACTION</varname></term>
+          <listitem>
+            <para>Match the name of the event action.</para>
+          </listitem>
+        </varlistentry>
+
+        <varlistentry>
+          <term><varname>DEVPATH</varname></term>
+          <listitem>
+            <para>Match the devpath of the event device.</para>
+          </listitem>
+        </varlistentry>
+
+        <varlistentry>
+          <term><varname>KERNEL</varname></term>
+          <listitem>
+            <para>Match the name of the event device.</para>
+          </listitem>
+        </varlistentry>
+
+        <varlistentry>
+          <term><varname>NAME</varname></term>
+          <listitem>
+            <para>Match the name of a network interface. It can be used once the
+            NAME key has been set in one of the preceding rules.</para>
+          </listitem>
+        </varlistentry>
+
+        <varlistentry>
+          <term><varname>SYMLINK</varname></term>
+          <listitem>
+            <para>Match the name of a symlink targeting the node. It can be used once a SYMLINK key has
+            been set in one of the preceding rules. There may be multiple symlinks; only one needs to
+            match. If the operator is <literal>!=</literal>, the token returns true only if there is no
+            symlink matched.</para>
+          </listitem>
+        </varlistentry>
+
+        <varlistentry>
+          <term><varname>SUBSYSTEM</varname></term>
+          <listitem>
+            <para>Match the subsystem of the event device.</para>
+          </listitem>
+        </varlistentry>
+        <varlistentry>
+          <term><varname>DRIVER</varname></term>
+          <listitem>
+            <para>Match the driver name of the event device. Only set this key for devices
+            which are bound to a driver at the time the event is generated.</para>
+          </listitem>
+        </varlistentry>
+        <varlistentry>
+          <term><varname>ATTR{<replaceable>filename</replaceable>}</varname></term>
+          <listitem>
+            <para>Match sysfs attribute values of the event device. Trailing
+            whitespace in the attribute values is ignored unless the specified match
+            value itself contains trailing whitespace.
+            </para>
+          </listitem>
+          <term><varname>SYSCTL{<replaceable>kernel parameter</replaceable>}</varname></term>
+          <listitem>
+            <para>Match a kernel parameter value. Like in systemd, the whitespace around the value
+            is removed, and a kernel parameter that does not exist has an empty value. Like in
+            systemd, a kernel parameter that cannot be read, or whose name contains
+            <literal>..</literal>, stops the processing of the rules for the event; unlike systemd,
+            which waits for it, this includes one that is not a regular file, e.g. a FIFO.
+            </para>
+          </listitem>
+        </varlistentry>
+
+        <varlistentry>
+          <term><varname>KERNELS</varname></term>
+          <listitem>
+            <para>Search the devpath upwards for a matching device name.</para>
+          </listitem>
+        </varlistentry>
+
+        <varlistentry>
+          <term><varname>SUBSYSTEMS</varname></term>
+          <listitem>
+            <para>Search the devpath upwards for a matching device subsystem name.</para>
+          </listitem>
+        </varlistentry>
+
+        <varlistentry>
+          <term><varname>DRIVERS</varname></term>
+          <listitem>
+            <para>Search the devpath upwards for a matching device driver name.</para>
+          </listitem>
+        </varlistentry>
+
+        <varlistentry>
+          <term><varname>ATTRS{<replaceable>filename</replaceable>}</varname></term>
+          <listitem>
+            <para>Search the devpath upwards for a device with matching sysfs attribute values.
+            If multiple <varname>ATTRS</varname> matches are specified, all of them
+            must match on the same device. Trailing whitespace in the attribute values is ignored
+            unless the specified match value itself contains trailing whitespace.</para>
+          </listitem>
+        </varlistentry>
+
+        <varlistentry>
+          <term><varname>TAGS</varname></term>
+          <listitem>
+            <para>Search the devpath upwards for a device with matching tag. If the operator is
+            <literal>!=</literal>, the token returns true only if there is no tag matched.
+            The current tags of the devices are matched, see <varname>TAG</varname> below;
+            for a device whose database entry was written by an older version of udev,
+            which did not keep the tags of earlier events, all its tags.</para>
+          </listitem>
+        </varlistentry>
+
+        <varlistentry>
+          <term><varname>ENV{<replaceable>key</replaceable>}</varname></term>
+          <listitem>
+            <para>Match against a device property value. When the device does not have
+            the property, the global property set with <command>udevadm control
+            --property</command> is matched, if there is one.</para>
+            <para>The synthetic events that <command>udevadm trigger</command> and
+            <command>udevd</command> trigger carry a random UUID in <literal>SYNTH_UUID=</literal>, and
+            the process ID, the program name and the time of the program that triggered them in
+            <literal>SYNTH_ARG_PID=</literal>, <literal>SYNTH_ARG_Comm=</literal>,
+            <literal>SYNTH_ARG_TimestampRealtime=</literal>,
+            <literal>SYNTH_ARG_TimestampMonotonic=</literal> and
+            <literal>SYNTH_ARG_TimestampBoottime=</literal> (with Linux 4.13 or newer; note the
+            mixed-case names), which can be matched here, e.g.
+            <literal>ENV{SYNTH_ARG_Comm}=="udevadm"</literal>. Like the other properties that come with
+            the event from the kernel, they are not stored in the udev database. See
+            <citerefentry><refentrytitle>udevadm</refentrytitle><manvolnum>8</manvolnum></citerefentry>
+            for details. The arguments, and then the UUID, are left out of an event that would not fit
+            into the buffer of the kernel with them, as counted from the <filename>uevent</filename> file
+            of the device, or for a power supply before Linux 5.8 from its attribute files; the files of
+            power supplies and of remote control receivers are not read, and on the kernel series 4.19,
+            5.4, 5.10, 5.15, 6.1, 6.6 and 6.9 to 6.14, whose <filename>uevent</filename> files may wait
+            for a driver, none is read, and only a power supply is counted. An event that does not fit
+            nevertheless is triggered again
+            without the arguments, and then without the UUID, also on the kernels that do not
+            report that, Linux 4.13 to 4.20 before the stable releases 4.14.99, 4.19.21 and 4.20.8, as
+            described there for <command>udevadm trigger</command>.</para>
+          </listitem>
+        </varlistentry>
+
+        <varlistentry>
+          <term><varname>TAG</varname></term>
+          <listitem>
+            <para>Match against one of device tags. It can be used once a TAG key has been set in one of
+            the preceding rules. There may be multiple tags; only one needs to match. If the operator is
+            <literal>!=</literal>, the token returns true only if there is no tag matched.
+            Only the current tags, those assigned while processing this event, are matched, not the
+            tags which remain from earlier events.</para>
+          </listitem>
+        </varlistentry>
+
+        <varlistentry>
+          <term><varname>TEST{<replaceable>octal mode mask</replaceable>}</varname></term>
+          <listitem>
+            <para>Test the existence of a file. An octal mode mask can be specified
+            if needed; then the file must also have at least one of the bits of the mask set in
+            its mode, e.g. <literal>TEST{0111}</literal> is true for a file that anyone may
+            execute. A mode mask that is zero, or that is not an octal number of at most
+            <literal>7777</literal>, is an error, and the rule line is ignored.</para>
+          </listitem>
+        </varlistentry>
+
+        <varlistentry>
+          <term><varname>PROGRAM</varname></term>
+          <listitem>
+            <para>Execute a program to determine whether there
+            is a match; the key is true if the program returns
+            successfully. The device properties are made available to the
+            executed program in the environment. The program's standard output
+            is available in the <varname>RESULT</varname> key.</para>
+            <para>This can only be used for very short-running foreground tasks. For details,
+            see <varname>RUN</varname>.</para>
+          </listitem>
+        </varlistentry>
+
+        <varlistentry>
+          <term><varname>RESULT</varname></term>
+          <listitem>
+            <para>Match the returned string of the last <varname>PROGRAM</varname> call.
+            This key can be used in the same or in any later rule after a
+            <varname>PROGRAM</varname> call.</para>
+          </listitem>
+        </varlistentry>
+      </variablelist>
+
+      <para>Most of the fields support shell glob pattern matching and
+      alternate patterns. The following special characters are supported:</para>
+      <variablelist>
+        <varlistentry>
+          <term><literal>*</literal></term>
+          <listitem>
+            <para>Matches zero or more characters.</para>
+          </listitem>
+        </varlistentry>
+        <varlistentry>
+          <term><literal>?</literal></term>
+          <listitem>
+            <para>Matches any single character.</para>
+          </listitem>
+        </varlistentry>
+        <varlistentry>
+          <term><literal>[]</literal></term>
+          <listitem>
+            <para>Matches any single character specified within the brackets. For
+            example, the pattern string <literal>tty[SR]</literal>
+            would match either <literal>ttyS</literal> or <literal>ttyR</literal>.
+            Ranges are also supported via the <literal>-</literal> character.
+            For example, to match on the range of all digits, the pattern
+            <literal>[0-9]</literal> could be used. If the first character
+            following the <literal>[</literal> is a <literal>!</literal>,
+            any characters not enclosed are matched.</para>
+          </listitem>
+        </varlistentry>
+        <varlistentry>
+          <term><literal>|</literal></term>
+          <listitem>
+            <para>Separates alternative patterns. For example, the pattern string
+            <literal>abc|x*</literal> would match either <literal>abc</literal>
+            or <literal>x*</literal>.</para>
+          </listitem>
+        </varlistentry>
+      </variablelist>
+
+      <para>The following keys can get values assigned:</para>
+      <variablelist class='udev-directives'>
+        <varlistentry>
+          <term><varname>NAME</varname></term>
+          <listitem>
+            <para>The name to use for a network interface. The name of a device node
+            cannot be changed by udev, only additional symlinks can be created.
+            <literal>NAME="%k"</literal>, which has no effect, and <literal>NAME=""</literal>
+            are errors, and the rule line is ignored.</para>
+            <para>As in systemd, a network interface name is valid if it has 1 to 15
+            printable ASCII characters other than space, <literal>:</literal>,
+            <literal>/</literal> and <literal>%</literal>, is not only digits, is not
+            an interface index written in another way, i.e. a number from 1 to
+            2147483647 with a <literal>0x</literal>, <literal>0o</literal> or
+            <literal>0b</literal> prefix or a <literal>+</literal> sign, e.g.
+            <literal>0x10</literal> or <literal>+5</literal>, and is not
+            <literal>.</literal>, <literal>..</literal>, <literal>all</literal> or
+            <literal>default</literal>. With the naming schemes <literal>v249</literal>
+            and later (see <xref linkend="net-naming"/>), all other characters are
+            replaced by <literal>_</literal>, and a name that is still not valid is
+            ignored with a warning. With the older schemes, only the characters that
+            are not allowed in symlink names (see <varname>SYMLINK</varname>) are
+            replaced, and renaming the interface to an invalid name fails. No
+            characters are replaced with <varname>OPTIONS+="string_escape=none"</varname>.</para>
+            <para>When another interface has the name, renaming the interface fails,
+            and it keeps its name, unless eudev is built with
+            <option>--enable-rule-generator</option>: then <command>udevd</command>
+            waits for the name to become free (see <xref linkend="rule-generator"/>).</para>
+          </listitem>
+        </varlistentry>
+
+        <varlistentry>
+          <term><varname>SYMLINK</varname></term>
+          <listitem>
+            <para>The name of a symlink targeting the node. Every matching rule adds
+            this value to the list of symlinks to be created. With the <literal>-=</literal>
+            operator, the specified symlinks are removed from that list again, which allows
+            suppressing symlinks added by earlier rules.</para>
+            <para>The set of characters to name a symlink is limited. Allowed
+            characters are <literal>0-9A-Za-z#+-.:=@_/</literal>, valid UTF-8 character
+            sequences, and <literal>\x00</literal> hex encoding. All other
+            characters are replaced by a <literal>_</literal> character.</para>
+            <para>The name is taken relative to <filename>/dev/</filename>, and may also
+            be given as an absolute path below <filename>/dev/</filename>. It is normalized:
+            redundant slashes, <literal>.</literal> components and trailing slashes are
+            removed, e.g. <literal>disk//by-foo/./bar/</literal> results in
+            <filename>/dev/disk/by-foo/bar</filename>. A name with a <literal>..</literal>
+            component or with a component longer than 255 bytes, a name with control
+            characters, which are only kept with
+            <varname>OPTIONS+="string_escape=none"</varname>, an absolute path outside of
+            <filename>/dev/</filename>, and a name that refers to <filename>/dev/</filename>
+            itself are refused with an error message. The symlinks recorded in the udev
+            database of a device are normalized and checked in the same way. A symlink is not
+            created, and a warning is logged, where a file or directory that is not a symlink
+            exists.</para>
+            <para>Multiple symlinks may be specified by separating the names by the
+            space character. In case multiple devices claim the same name, the link
+            always points to the device with the highest link_priority. If the current
+            device goes away, the links are re-evaluated and the device with the
+            next highest link_priority becomes the owner of the link. If no
+            link_priority is specified, the order of the devices (and which one of
+            them owns the link) is undefined.</para>
+            <para>Symlink names must never conflict with the kernel's default device
+            node names, as that would result in unpredictable behavior.
+            </para>
+            <para>On a remove event, the symlinks recorded in the udev database of the
+            device are removed, together with the ones the rules add for the event. Unlike
+            in systemd, a <varname>SYMLINK=</varname> or <varname>SYMLINK-=</varname> in
+            a rule line that is evaluated on a remove event does not keep any of them, which
+            would leave dangling symlinks behind.</para>
+          </listitem>
+        </varlistentry>
+
+        <varlistentry>
+          <term><varname>OWNER</varname>, <varname>GROUP</varname>, <varname>MODE</varname></term>
+          <listitem>
+            <para>The permissions for the device node. Every specified value overrides
+            the compiled-in default value.</para>
+            <para>Users and groups are resolved like systemd does it, with the user and group
+            database: a number must be a valid user or group ID, in decimal without leading
+            zeros, and is looked up as ID, anything else must be a valid name. If the database
+            does not have them, the ID 0 and the name <literal>root</literal>, the ID 65534 and
+            the name of the nobody user or group (set when eudev is built with
+            <option>--with-nobody-user</option> and <option>--with-nobody-group</option>, by default
+            <literal>nobody</literal>; Debian, for example, calls the group
+            <literal>nogroup</literal>), unless one of the files
+            <filename>/etc/systemd/dont-synthesize-nobody</filename> (like in systemd) and
+            <filename>/etc/udev/dont-synthesize-nobody</filename> exists, the IDs of system users
+            and groups (up to <varname>SYS_UID_MAX</varname> and <varname>SYS_GID_MAX</varname>
+            of <filename>/etc/login.defs</filename>, which every process reads once, like systemd
+            built with its compat-mutable-uid-boundaries option; for the ones that the file does
+            not set, up to the ones set when eudev is built with <option>--with-system-uid-max</option>
+            and <option>--with-system-gid-max</option>, by default
+            <varname>SYS_UID_MAX</varname> and <varname>SYS_GID_MAX</varname> of
+            <filename>/etc/login.defs</filename> of the build system, or 999), and the IDs and names (<literal>foreign-</literal><replaceable>N</replaceable>) of the range of
+            foreign users and groups of systemd (65536 IDs from the one set when eudev is built
+            with <option>--with-foreign-uid-base</option>, by default
+            <literal>0x7FFE0000</literal>) are taken as they are. Like systemd, a warning
+            is logged for a user or group that is not a system account, as device nodes owned
+            by other accounts are deprecated.</para>
+            <para>A number, and a name without substitutions, unless <command>udevd</command> is
+            started with <option>--resolve-names=late</option> or <option>never</option>, is
+            resolved when the rules are read. If the user or group does not exist, an error is
+            logged, and only this key is ignored: the rest of the rule line, e.g.
+            <varname>MODE</varname> or <varname>SYMLINK</varname>, still applies, also with
+            <option>static_node=</option>. Unlike systemd, which ignores the whole rule line
+            then, the rules keep working on a system that lacks a group they use. The same
+            applies if <varname>OWNER</varname> or <varname>GROUP</varname> is empty, or not a
+            valid user or group name or ID, e.g. a number with leading zeros: an error is logged,
+            and only this key is ignored. The other values are resolved whenever the rule is
+            applied; if that fails, an error is logged, and the owner or group is left as it
+            is. With <option>--resolve-names=never</option>, they are ignored.</para>
+            <para>A
+            <varname>MODE</varname> must be an octal number of at most <literal>7777</literal>.
+            A value without substitutions that is not valid, also an empty one, is an error when
+            the rules are read, and only this key is ignored, like for an unknown user or group:
+            the rest of the rule line still applies. A value with substitutions that is not valid
+            after the substitutions fails with an error message whenever the rule is applied,
+            and the mode is left as it is; with <literal>:=</literal>, it is still made
+            final, like in systemd.</para>
+          </listitem>
+        </varlistentry>
+
+        <varlistentry>
+          <term><varname>SECLABEL{<replaceable>module</replaceable>}</varname></term>
+          <listitem>
+            <para>Applies the specified Linux Security Module label to the device node.
+            The modules are <literal>selinux</literal> and <literal>smack</literal>.
+            SMACK labels are only applied when eudev is built with
+            <option>--enable-smack</option> and the kernel uses SMACK.</para>
+          </listitem>
+        </varlistentry>
+
+        <varlistentry>
+          <term><varname>ATTR{<replaceable>key</replaceable>}</varname></term>
+          <listitem>
+            <para>The value that should be written to a sysfs attribute of the
+            event device. Unlike systemd, which waits for a reader, a FIFO or a
+            socket is not written, and the assignment fails; the attribute is
+            written without waiting.</para>
+          </listitem>
+        </varlistentry>
+
+        <varlistentry>
+          <term><varname>SYSCTL{<replaceable>kernel parameter</replaceable>}</varname></term>
+          <listitem>
+            <para>The value that should be written to kernel parameter. Like in
+            systemd, a kernel parameter whose name contains <literal>..</literal>
+            is not written. Unlike systemd, which waits for a reader, only a
+            regular file is written, without waiting, e.g. not a FIFO; the
+            assignment fails otherwise.</para>
+          </listitem>
+        </varlistentry>
+
+        <varlistentry>
+          <term><varname>ENV{<replaceable>key</replaceable>}</varname></term>
+          <listitem>
+            <para>Set a device property value. Property names with a leading <literal>.</literal>
+            are not stored in the database. Like all other properties, they are passed in the
+            environment of the programs run by <varname>RUN</varname>,
+            <varname>PROGRAM</varname> and <varname>IMPORT{program}</varname>, and are sent
+            with the event to the event listeners.</para>
+            <para>A property name may only contain ASCII letters, digits, <literal>_</literal>
+            and <literal>.</literal>, and a value must be valid UTF-8 without control
+            characters, like newlines or tabs. Other properties are refused: an assignment or an
+            <varname>IMPORT</varname> logs a warning and the rest of the rule is still applied,
+            and invalid properties set by built-in commands or received with the kernel event are
+            ignored. Assigning an empty value, also as the result of substitutions, removes the
+            property.</para>
+            <para>The properties that udev sets itself cannot be assigned: <literal>ACTION</literal>,
+            <literal>SEQNUM</literal>, <literal>SYNTH_UUID</literal>, <literal>DEVPATH</literal>,
+            <literal>DEVPATH_OLD</literal>, <literal>SUBSYSTEM</literal>, <literal>DEVTYPE</literal>,
+            <literal>DRIVER</literal>, <literal>MODALIAS</literal>, <literal>DEVNAME</literal>,
+            <literal>DEVMODE</literal>, <literal>DEVUID</literal>, <literal>DEVGID</literal>,
+            <literal>MAJOR</literal>, <literal>MINOR</literal>, <literal>DISKSEQ</literal>,
+            <literal>PARTN</literal>, <literal>IFINDEX</literal>, <literal>INTERFACE</literal>,
+            <literal>INTERFACE_OLD</literal>, <literal>DEVLINKS</literal>, <literal>TAGS</literal>,
+            <literal>CURRENT_TAGS</literal>, <literal>USEC_INITIALIZED</literal>,
+            <literal>UDEV_DATABASE_VERSION</literal>, and names starting with
+            <literal>SYNTH_ARG_</literal>. A rule line assigning one of them is invalid, and is
+            ignored as a whole. <varname>IMPORT</varname> and the <literal>hwdb</literal> built-in
+            command do not set them either, see below.</para>
+          </listitem>
+        </varlistentry>
+
+        <varlistentry>
+          <term><varname>TAG</varname></term>
+          <listitem>
+            <para>Attach a tag to a device. This is used to filter events for users
+            of libudev's monitor functionality, or to enumerate a group of tagged
+            devices. The implementation can only work efficiently if only a few
+            tags are attached to a device. It is only meant to be used in
+            contexts with specific device filter requirements, and not as a
+            general-purpose flag. Excessive use might result in inefficient event
+            handling.</para>
+            <para>Tags are "sticky": a tag attached by one event stays attached to the device,
+            in the <varname>TAGS</varname> property and in the index of tagged devices, until
+            the device is removed, so that programs filtering events by tag also see the events
+            of the device after the tag is no longer assigned. The tags assigned while
+            processing the most recent event are the current tags, in the
+            <varname>CURRENT_TAGS</varname> property.</para>
+            <para>A tag name may only contain ASCII letters, digits, <literal>-</literal> and
+            <literal>_</literal>; other names, also an empty one, are ignored with a warning, like
+            in systemd. <literal>+=</literal>
+            attaches the tag. <literal>-=</literal> removes it from the current tags only.
+            <literal>=</literal> and <literal>:=</literal> first clear the current tags, and drop
+            the tags attached earlier while processing this event, and then attach the tag;
+            <varname>TAG</varname><literal>=""</literal> only clears them, with the warning about
+            the empty name.</para>
+          </listitem>
+        </varlistentry>
+
+        <varlistentry>
+          <term><varname>RUN{<replaceable>type</replaceable>}</varname></term>
+          <listitem>
+            <para>Add a program to the list of programs to be executed after
+            processing all the rules for a specific event, depending on
+            <literal>type</literal>:</para>
+            <variablelist>
+              <varlistentry>
+                <term><literal>program</literal></term>
+                <listitem>
+                  <para>Execute an external program specified as the assigned
+                  value. If no absolute path is given, the program is expected
+                  to live in <filename>/lib/udev</filename>, otherwise, the
+                  absolute path must be specified.</para>
+                  <para>This is the default if no <replaceable>type</replaceable>
+                  is specified.</para>
+                </listitem>
+              </varlistentry>
+              <varlistentry>
+                <term><literal>builtin</literal></term>
+                <listitem>
+                  <para>As <varname>program</varname>, but use one of the
+                  built-in programs rather than an external one.</para>
+                </listitem>
+              </varlistentry>
+            </variablelist>
+            <para>The program name or the name of a builtin, and its arguments are
+            separated by any whitespace. Single and double quotes, also in the middle
+            of an argument, group characters including whitespace and are removed, e.g.
+            <literal>a"b c"d</literal> is the single argument <literal>ab cd</literal>;
+            a missing closing quote is accepted. Backslashes have no special meaning.
+            This applies to <varname>PROGRAM</varname> and
+            <varname>IMPORT{program}</varname> as well.</para>
+            <para>This can only be used for very short-running foreground tasks. Running an
+            event process for a long period of time may block all further events for
+            this or a dependent device.</para>
+            <para>Starting daemons or other long-running processes is not appropriate
+            for udev; the forked processes, detached or not, will be unconditionally
+            killed after the event handling has finished.</para>
+          </listitem>
+        </varlistentry>
+
+        <varlistentry>
+          <term><varname>LABEL</varname></term>
+          <listitem>
+            <para>A named label to which a <varname>GOTO</varname> may jump.</para>
+          </listitem>
+        </varlistentry>
+
+        <varlistentry>
+          <term><varname>GOTO</varname></term>
+          <listitem>
+            <para>Jumps to the next <varname>LABEL</varname> with a matching name. Like in
+            systemd, only the first <varname>GOTO</varname> of a rule counts; the later ones
+            are ignored with a warning.</para>
+          </listitem>
+        </varlistentry>
+
+        <varlistentry>
+          <term><varname>IMPORT{<replaceable>type</replaceable>}</varname></term>
+          <listitem>
+            <para>Import a set of variables as device properties,
+            depending on <literal>type</literal>:</para>
+            <variablelist>
+              <varlistentry>
+                <term><literal>program</literal></term>
+                <listitem>
+                  <para>Execute an external program specified as the assigned value and
+                  import its output, which must be in environment key
+                  format. Path specification, command/argument separation,
+                  and quoting work like in <varname>RUN</varname>.</para>
+                </listitem>
+              </varlistentry>
+              <varlistentry>
+                <term><literal>builtin</literal></term>
+                <listitem>
+                  <para>Similar to <literal>program</literal>, but use one of the
+                  built-in programs rather than an external one.</para>
+                </listitem>
+              </varlistentry>
+             <varlistentry>
+                <term><literal>file</literal></term>
+                <listitem>
+                  <para>Import a text file specified as the assigned value, the content
+                  of which must be in environment key format. A line may be up to 1 MiB
+                  long; a longer line stops the import, and the key is false, while the
+                  properties imported before it are kept. Like in systemd, a character
+                  device is read too, e.g. <filename>/dev/null</filename> is imported as
+                  empty. Unlike systemd, which waits for a writer and for data, the file is
+                  read without waiting: a FIFO or a socket is not read, and a file without
+                  data, e.g. a terminal, fails to be read; the key is false then.</para>
+                </listitem>
+              </varlistentry>
+              <varlistentry>
+                <term><literal>db</literal></term>
+                <listitem>
+                  <para>Import a single property specified as the assigned value from the
+                  current device database. Besides the properties stored there by an earlier
+                  event, this finds the properties of the current event, such as
+                  <varname>PRODUCT</varname> of a USB device, even when the database has no
+                  entry for the device yet; when both have the property, the value of the
+                  database is imported. A property that cannot be set, e.g.
+                  <varname>DEVNAME</varname> or <varname>ACTION</varname>, is not imported, see
+                  below.</para>
+                </listitem>
+              </varlistentry>
+              <varlistentry>
+                <term><literal>cmdline</literal></term>
+                <listitem>
+                  <para>Import a single property from the kernel command line. For simple flags
+                  the value of the property is set to <literal>1</literal>. Options starting
+                  with <literal>rd.</literal> are only imported in an initrd, see
+                  <citerefentry><refentrytitle>udevd</refentrytitle><manvolnum>8</manvolnum></citerefentry>;
+                  the prefix is part of the key, i.e. <literal>IMPORT{cmdline}="foo"</literal>
+                  does not import <literal>rd.foo</literal>. For testing, the
+                  kernel command line can be replaced with the
+                  <varname>$UDEV_PROC_CMDLINE</varname> environment variable, see
+                  <citerefentry><refentrytitle>udevd</refentrytitle><manvolnum>8</manvolnum></citerefentry>.</para>
+                </listitem>
+              </varlistentry>
+              <varlistentry>
+                <term><literal>parent</literal></term>
+                <listitem>
+                  <para>Import the properties of the parent device, both the ones of its
+                  uevent file and the ones stored in its database entry. The value assigned to
+                  <option>IMPORT{parent}</option> is used as a filter of key names
+                  to import (with the same shell glob pattern matching used for
+                  comparisons). The properties that cannot be set, e.g. the parent's
+                  <varname>DEVPATH</varname> or <varname>SUBSYSTEM</varname>, are not
+                  imported, see below. The import is successful when at least one property was
+                  imported.</para>
+                </listitem>
+              </varlistentry>
+            </variablelist>
+            <para>This can only be used for very short-running foreground tasks. For details
+            see <option>RUN</option>.</para>
+
+            <para>The properties that cannot be assigned with
+            <varname>ENV{<replaceable>key</replaceable>}</varname> (see above), i.e. the ones
+            that describe the device and the event, like <varname>DEVPATH</varname>,
+            <varname>SUBSYSTEM</varname>, <varname>ACTION</varname>, <varname>SEQNUM</varname>,
+            <varname>SYNTH_UUID</varname>, <varname>DEVNAME</varname>,
+            <varname>MAJOR</varname> and <varname>MINOR</varname>, are not imported either:
+            such a line of the output of <literal>program</literal> or of a
+            <literal>file</literal>, and such a property of the parent device, are skipped,
+            and <literal>db</literal> and <literal>cmdline</literal> with such a name are
+            false; for them, a warning is logged when the rules are read, and by
+            <command>udevadm verify</command>, but the rule is kept, so that e.g.
+            <literal>IMPORT{db}!="DEVNAME"</literal> is true. The <literal>hwdb</literal>
+            built-in command skips them in the entries of
+            the hardware database. Otherwise the event that udev sends to the event listeners
+            would look like an event of another device, or one with another action, and the
+            database would keep the values.</para>
+
+            <para>Note that multiple <varname>IMPORT{}</varname> keys may be specified in one rule, and
+            <literal>=</literal>, <literal>:=</literal>, and <literal>+=</literal> have the same effect as
+            <literal>==</literal>. The key is true if the import is successful, unless <literal>!=</literal>
+            is used as the operator which causes the key to be true if the import failed.</para>
+
+            <para>Some errors are not a failed import, but stop the processing of the event: when the
+            file of <literal>IMPORT{file}</literal> exists but cannot be opened, when the kernel command
+            line cannot be read for <literal>IMPORT{cmdline}</literal>, or when the memory runs out.
+            Then no further rules are applied, the device node and its symlinks are not handled, the
+            database is not updated, and the programs of <varname>RUN</varname> are not run; the event
+            is still sent to the event listeners.</para>
+          </listitem>
+        </varlistentry>
+
+        <varlistentry>
+          <term><varname>OPTIONS</varname></term>
+          <listitem>
+            <para>Rule and device options. Several options may be given in one value, separated by
+            commas, e.g. <literal>OPTIONS+="watch,link_priority=10"</literal>; each one must be
+            exactly one of the options below. An unknown option is ignored with a warning, and the
+            rest of the rule is applied. An invalid value of <option>link_priority=</option> or
+            <option>log_level=</option> makes the rule line invalid, as do the operators
+            <literal>==</literal>, <literal>!=</literal> and <literal>-=</literal>;
+            <literal>+=</literal> has the same effect as <literal>=</literal>.</para>
+            <variablelist class='udev-directives'>
+              <varlistentry>
+                <term><option>link_priority=<replaceable>value</replaceable></option></term>
+                <listitem>
+                  <para>Specify the priority of the created symlinks. Devices with higher
+                  priorities overwrite existing symlinks of other devices. The default is 0.</para>
+                </listitem>
+              </varlistentry>
+              <varlistentry>
+                <term><option>string_escape=<replaceable>none|replace</replaceable></option></term>
+                <listitem>
+                  <para>When <literal>replace</literal>, possibly unsafe characters in strings
+                  assigned to <varname>NAME</varname>, <varname>SYMLINK</varname>, and
+                  <varname>ENV{<replaceable>key</replaceable>}</varname> are replaced. When
+                  <literal>none</literal>, no replacement is performed. When unset, the replacement
+                  is performed for <varname>NAME</varname>, <varname>SYMLINK</varname>, but not for
+                  <varname>ENV{<replaceable>key</replaceable>}</varname>. Defaults to unset.</para>
+                </listitem>
+              </varlistentry>
+              <varlistentry>
+                <term><option>static_node=</option></term>
+                <listitem>
+                  <para>Apply the permissions specified in this rule to the
+                  static device node with the specified name.  Static device node
+                  creation can be requested by kernel modules.  These nodes might
+                  not have a corresponding kernel device at the time udevd is started;
+                  they can trigger automatic kernel module loading. The values that are
+                  known when the rules are read are applied, like in systemd: an
+                  <varname>OWNER</varname> or <varname>GROUP</varname> that is a number, or
+                  a name without substitutions when names are resolved early, a
+                  <varname>MODE</varname> without substitutions, and the
+                  <varname>TAG</varname> values; also the value 0, e.g.
+                  <literal>OWNER="root"</literal>.</para>
+                </listitem>
+              </varlistentry>
+              <varlistentry>
+                <term><option>net_altnames</option></term>
+                <listitem>
+                  <para>Assign alternative names to a network interface when it is
+                  added. After the <literal>add</literal> event is processed and the
+                  interface is renamed, if requested, the values of the
+                  <varname>ID_NET_NAME_FROM_DATABASE</varname>,
+                  <varname>ID_NET_NAME_ONBOARD</varname>,
+                  <varname>ID_NET_NAME_SLOT</varname>,
+                  <varname>ID_NET_NAME_PATH</varname> and
+                  <varname>ID_NET_NAME_MAC</varname> properties that are valid
+                  alternative names, i.e. valid interface names (see
+                  <varname>NAME</varname>) with up to 127 characters, and differ from
+                  the name of the interface, are assigned to it as alternative
+                  names, like the default <varname>AlternativeNamesPolicy=</varname>
+                  of systemd does. Names that the interface already has are not
+                  assigned again, names used by other interfaces are skipped. As in
+                  systemd, they are not assigned when renaming the interface fails,
+                  unless it is up. Alternative names require Linux 5.5 or later,
+                  older kernels are silently ignored. <command>udevadm test</command>
+                  does not assign them, but shows them, like systemd, also the name
+                  the interface would get. Nothing is done when
+                  <varname>net_altnames=no</varname> is set in
+                  <citerefentry><refentrytitle>udev.conf</refentrytitle><manvolnum>5</manvolnum></citerefentry>.
+                  </para>
+                </listitem>
+              </varlistentry>
+              <varlistentry>
+                <term><option>watch</option></term>
+                <listitem>
+                  <para>Watch the device node with inotify; when the node is
+                  closed after being opened for writing, a change uevent is
+                  synthesized.</para>
+                </listitem>
+              </varlistentry>
+              <varlistentry>
+                <term><option>nowatch</option></term>
+                <listitem>
+                  <para>Disable the watching of a device node with inotify.</para>
+                </listitem>
+              </varlistentry>
+              <varlistentry>
+                <term><option>db_persist</option></term>
+                <listitem>
+                  <para>Set the flag (sticky bit) on the udev database entry
+                  of the event device. Device properties are then kept in the
+                  database even when
+                  <command>udevadm info --cleanup-db</command> is called.
+                  This option can be useful in certain cases
+                  (e.g. Device Mapper devices) for persisting device state
+                  on the transition from initramfs.</para>
+                </listitem>
+              </varlistentry>
+              <varlistentry>
+                <term><option>log_level=<replaceable>level</replaceable></option></term>
+                <listitem>
+                  <para>Takes a log level name like <literal>debug</literal> or
+                  <literal>info</literal>, or a special value <literal>reset</literal>. When a log
+                  level name is specified, the maximum log level is changed to that level. When
+                  <literal>reset</literal> is set, then the previously specified log level is
+                  revoked. Defaults to the log level of the main process of
+                  <command>udevd</command>.</para>
+                  <para>This may be useful when debugging events for certain devices. Note that the
+                  log level is applied when the line including this rule is processed. So, for
+                  debugging, it is recommended that this is specified at earlier place, e.g., the
+                  first line of <filename>00-debug.rules</filename>.</para>
+                  <para>Example for debugging uevent processing for network interfaces.
+                  <programlisting># /etc/udev/rules.d/00-debug-net.rules
+SUBSYSTEM=="net", OPTIONS="log_level=debug"</programlisting></para>
+                </listitem>
+              </varlistentry>
+              <varlistentry>
+                <term><option>dump</option></term>
+                <listitem>
+                  <para>Dump the status of the event currently processing. It may be useful for debugging
+                  udev rules by inserting this option.</para>
+                </listitem>
+              </varlistentry>
+              <varlistentry>
+                <term><option>dump-json</option></term>
+                <listitem>
+                  <para>Similar to <option>dump</option>, but dump the status of the event in JSON format.</para>
+                </listitem>
+              </varlistentry>
+            </variablelist>
+          </listitem>
+        </varlistentry>
+      </variablelist>
+
+      <para>Like in systemd, some errors while a rule is applied stop the processing of the
+      event, like the ones of <varname>IMPORT</varname> above: when <varname>SYSCTL{}</varname>
+      cannot read the kernel parameter, unless it does not exist; when a <literal>*</literal>
+      path component of <varname>TEST</varname> cannot be resolved because the directory cannot
+      be read; when <varname>ENV{}</varname> cannot remove a property, e.g. because its name is
+      not valid; and when the memory runs out. Then no further rules are applied, the device
+      node and its symlinks are not handled, the database is not updated, and the programs of
+      <varname>RUN</varname> are not run; the event is still sent to the event listeners.</para>
+
+      <para>The <varname>NAME</varname>, <varname>SYMLINK</varname>,
+      <varname>PROGRAM</varname>, <varname>OWNER</varname>,
+      <varname>GROUP</varname>, <varname>MODE</varname>, <varname>SECLABEL</varname>,
+      and <varname>RUN</varname> fields support simple string substitutions.
+      The substitutions are performed while the individual rule is being
+      processed, so they use the device properties set by the preceding
+      rules. Like in systemd, when the result does not fit into the buffer of the key (for
+      example 512 bytes for <varname>ENV</varname>, 1024 bytes for <varname>SYMLINK</varname>,
+      16384 bytes for <varname>PROGRAM</varname> and <varname>RUN</varname>), a match key fails,
+      with a debug message, and an assignment key is not applied, with a warning; an invalid
+      substitution, e.g. one with a missing closing brace, ends the result there, with a
+      warning. The available substitutions are:</para>
+      <variablelist class='udev-directives'>
+        <varlistentry>
+          <term><option>$kernel</option>, <option>%k</option></term>
+          <listitem>
+            <para>The kernel name for this device.</para>
+          </listitem>
+        </varlistentry>
+
+        <varlistentry>
+          <term><option>$number</option>, <option>%n</option></term>
+          <listitem>
+            <para>The kernel number for this device. For example,
+              <literal>sda3</literal> has kernel number <literal>3</literal>.
+            </para>
+          </listitem>
+        </varlistentry>
+
+        <varlistentry>
+          <term><option>$devpath</option>, <option>%p</option></term>
+          <listitem>
+            <para>The devpath of the device.</para>
+          </listitem>
+        </varlistentry>
+
+        <varlistentry>
+          <term><option>$id</option>, <option>%b</option></term>
+          <listitem>
+            <para>The name of the device matched while searching the devpath
+              upwards for <option>SUBSYSTEMS</option>, <option>KERNELS</option>,
+              <option>DRIVERS</option>, and <option>ATTRS</option>.
+            </para>
+          </listitem>
+        </varlistentry>
+
+        <varlistentry>
+          <term><option>$driver</option></term>
+          <listitem>
+            <para>The driver name of the device matched while searching the
+              devpath upwards for <option>SUBSYSTEMS</option>,
+              <option>KERNELS</option>, <option>DRIVERS</option>, and
+              <option>ATTRS</option>.
+            </para>
+          </listitem>
+        </varlistentry>
+
+        <varlistentry>
+          <term><option>$attr{<replaceable>file</replaceable>}</option>, <option>%s{<replaceable>file</replaceable>}</option></term>
+          <listitem>
+            <para>The value of a sysfs attribute found at the device where
+              all keys of the rule have matched. If the matching device does not
+              have such an attribute, and a previous <option>KERNELS</option>,
+              <option>SUBSYSTEMS</option>, <option>DRIVERS</option>, or
+              <option>ATTRS</option> test selected a parent device, then the
+              attribute from that parent device is used.
+            </para>
+            <para>If the attribute is a symlink, the last element of the
+              symlink target is returned as the value.
+            </para>
+          </listitem>
+        </varlistentry>
+
+        <varlistentry>
+          <term><option>$env{<replaceable>key</replaceable>}</option>, <option>%E{<replaceable>key</replaceable>}</option></term>
+          <listitem>
+            <para>A device property value. When the device does not have the property, the value
+            of the global property set with <command>udevadm control --property</command>, if
+            there is one.</para>
+          </listitem>
+        </varlistentry>
+
+        <varlistentry>
+          <term><option>$major</option>, <option>%M</option></term>
+          <listitem>
+            <para>The kernel major number for the device.</para>
+          </listitem>
+        </varlistentry>
+
+        <varlistentry>
+          <term><option>$minor</option>, <option>%m</option></term>
+          <listitem>
+            <para>The kernel minor number for the device.</para>
+          </listitem>
+        </varlistentry>
+
+        <varlistentry>
+          <term><option>$result</option>, <option>%c</option></term>
+          <listitem>
+            <para>The string returned by the external program requested with
+            <varname>PROGRAM</varname>.
+            A single part of the string, separated by whitespace, may be selected
+            by specifying the part number as an attribute: <literal>%c{N}</literal>.
+            If the number is followed by the <literal>+</literal> character, this part plus all remaining parts
+            of the result string are substituted: <literal>%c{N+}</literal>. Like in systemd, the
+            parts are counted from 1, after leading whitespace, and 0 selects the whole string;
+            a part number that is not a number is an error, which stops the substitution with a
+            warning, and which <command>udevadm verify</command> reports.</para>
+          </listitem>
+        </varlistentry>
+
+        <varlistentry>
+          <term><option>$parent</option>, <option>%P</option></term>
+          <listitem>
+            <para>The node name of the parent device.</para>
+          </listitem>
+        </varlistentry>
+
+        <varlistentry>
+          <term><option>$name</option></term>
+          <listitem>
+            <para>The current name of the device. If not changed by a rule, it is the
+            name of the kernel device.</para>
+          </listitem>
+        </varlistentry>
+
+        <varlistentry>
+          <term><option>$links</option></term>
+          <listitem>
+            <para>A space-separated list of the current symlinks. The value is
+            only set during a remove event or if an earlier rule assigned a value.</para>
+          </listitem>
+        </varlistentry>
+
+        <varlistentry>
+          <term><option>$sys</option>, <option>%S</option></term>
+          <listitem>
+            <para>The sysfs mount point.</para>
+          </listitem>
+        </varlistentry>
+
+        <varlistentry>
+          <term><option>$devnode</option>, <option>%N</option></term>
+          <listitem>
+            <para>The name of the device node.</para>
+          </listitem>
+        </varlistentry>
+
+        <varlistentry>
+          <term><option>%%</option></term>
+          <listitem>
+          <para>The <literal>%</literal> character itself.</para>
+          </listitem>
+        </varlistentry>
+
+        <varlistentry>
+          <term><option>$$</option></term>
+          <listitem>
+          <para>The <literal>$</literal> character itself.</para>
+          </listitem>
+        </varlistentry>
+      </variablelist>
+  </refsect1>
+
+  <refsect1><title>Built-in Commands</title>
+      <para>Built-in commands are run with <varname>IMPORT{builtin}</varname> and
+      <varname>RUN{builtin}</varname>. <command>udevadm test-builtin --help</command>
+      lists the available builtins, and <command>udevadm test-builtin</command>
+      runs one on a device and prints the properties it sets. The builtins and
+      properties described here are compatible with systemd-udevd.</para>
+
+      <refsect2><title>blkid</title>
+        <para><command>blkid</command> [<option>--offset=</option><replaceable>bytes</replaceable>]
+        [<option>--hint=</option><replaceable>name</replaceable><literal>=</literal><replaceable>value</replaceable>]
+        [<option>--noraid</option>] probes a block device for file systems and
+        partition tables with libblkid and sets <varname>ID_FS_*</varname> and
+        <varname>ID_PART_*</varname> properties. Among them:</para>
+
+        <variablelist>
+          <varlistentry>
+            <term><varname>ID_FS_VOLUME_ID=</varname></term>
+            <term><varname>ID_FS_LOGICAL_VOLUME_ID=</varname></term>
+            <term><varname>ID_FS_VOLUME_SET_ID=</varname></term>
+            <term><varname>ID_FS_DATA_PREPARER_ID=</varname></term>
+            <listitem>
+              <para>The volume, logical volume, volume set and data preparer
+              identifiers, which libblkid 2.37 and newer reports for e.g. ISO 9660
+              and UDF file systems. Like in <varname>ID_FS_LABEL_ENC=</varname>,
+              characters that are not safe are encoded as
+              <literal>\x</literal><replaceable>nn</replaceable>.</para>
+            </listitem>
+          </varlistentry>
+
+          <varlistentry>
+            <term><varname>ID_PART_GPT_AUTO_ROOT_DISK=1</varname></term>
+            <term><varname>ID_PART_GPT_AUTO_ROOT_UUID=</varname></term>
+            <listitem>
+              <para>Set on the whole disk with a GPT partition table that the root
+              file system is expected on, together with the partition UUID of its
+              root partition, if it has one. In the initrd, this is the disk that
+              carries the EFI System Partition or the XBOOTLDR partition whose
+              partition UUID the boot loader reports in the
+              <varname>LoaderDevicePartUUID-4a67b082-0a4c-41cf-b6c7-440b29bb8c4f</varname>
+              EFI variable (systemd-boot and GRUB with the <literal>bli</literal>
+              module set it), or, without that variable, a loop device whose
+              backing file name is <literal>rootdisk</literal> or
+              <literal>rootdisk.raw</literal>. The root partition is the partition
+              with the root partition type of the native architecture (e.g.
+              <literal>4f68bce3-e8cd-4db1-96e7-fbcaf984b709</literal> on x86-64) that
+              has the newest version in its label; partitions with the
+              <literal>no-auto</literal> flag (bit 63) and partitions labelled
+              <literal>_empty</literal> are skipped. After the initrd, it is the
+              disk that the root file system is on (also through dm-crypt,
+              dm-verity or a single-device btrfs), and the partition that holds
+              it, if it has the root partition type. The initrd is recognized by
+              <filename>/etc/initrd-release</filename> and a tmpfs or ramfs root
+              file system. Only whole disks with partition scanning enabled are
+              considered.</para>
+            </listitem>
+          </varlistentry>
+
+          <varlistentry>
+            <term><varname>ID_PART_GPT_AUTO_ROOT=1</varname></term>
+            <listitem>
+              <para>Set on the partition whose partition UUID matches
+              <varname>ID_PART_GPT_AUTO_ROOT_UUID=</varname> of its disk.
+              <filename>90-image-dissect.rules</filename> creates the symlink
+              <filename>/dev/gpt-auto-root</filename> for it, or
+              <filename>/dev/gpt-auto-root-luks</filename> if it is a LUKS
+              volume. While a factory reset is in progress
+              (<varname>ID_FACTORY_RESET=on</varname>, see below), it gets
+              <filename>/dev/gpt-auto-root-ignore-factory-reset</filename> or
+              <filename>/dev/gpt-auto-root-luks-ignore-factory-reset</filename>
+              instead, and once the factory reset is complete, both. When the
+              LUKS volume is unlocked as a device mapper device named
+              <literal>root</literal>, that device gets
+              <filename>/dev/gpt-auto-root</filename>, and also
+              <filename>/dev/gpt-auto-root-ignore-factory-reset</filename> while
+              a factory reset is in progress or complete.</para>
+            </listitem>
+          </varlistentry>
+
+          <varlistentry>
+            <term><varname>ID_PART_GPT_SECTOR_SIZE=</varname></term>
+            <listitem>
+              <para>The sector size, 512, 1024, 2048 or 4096, for which the GPT
+              partition table of the device was written, as found by looking for
+              the GPT header in the second sector for each of these sizes. Set
+              on every device with a GPT partition table that
+              <command>blkid</command> is run on without
+              <option>--offset=</option>.</para>
+            </listitem>
+          </varlistentry>
+
+          <varlistentry>
+            <term><varname>ID_PART_GPT_AUTO_ROOT_DISK_NEEDS_LOOP=1</varname></term>
+            <listitem>
+              <para>Set on a disk whose GPT partitions the kernel cannot expose
+              itself, because the partition table was written for another sector
+              size than the one of the device (e.g. a GPT for 512-byte sectors on a
+              CD-ROM with 2048-byte blocks that was booted via El Torito) or
+              because partition scanning is not enabled on the device, if it
+              carries the EFI System Partition or the XBOOTLDR partition whose
+              partition UUID the boot loader reports in the
+              <varname>LoaderDevicePartUUID-4a67b082-0a4c-41cf-b6c7-440b29bb8c4f</varname>
+              EFI variable. systemd then sets up a loop device with the sector
+              size of <varname>ID_PART_GPT_SECTOR_SIZE=</varname> to expose the
+              partitions; eudev only sets the property, and ships no rule that
+              sets up the loop device.</para>
+            </listitem>
+          </varlistentry>
+        </variablelist>
+      </refsect2>
+
+      <refsect2><title>factory_reset</title>
+        <para><command>factory_reset status</command> sets
+        <varname>ID_FACTORY_RESET=</varname> to the factory reset state, as systemd
+        determines it, so that rules can e.g. ignore devices while a factory reset
+        is in progress:</para>
+
+        <variablelist>
+          <varlistentry>
+            <term><literal>unsupported</literal></term>
+            <listitem>
+              <para>The environment variable
+              <varname>$SYSTEMD_FACTORY_RESET_SUPPORTED</varname> of the udev daemon
+              is set to false.</para>
+            </listitem>
+          </varlistentry>
+
+          <varlistentry>
+            <term><literal>complete</literal></term>
+            <listitem>
+              <para><filename>/run/systemd/factory-reset-complete</filename>
+              exists.</para>
+            </listitem>
+          </varlistentry>
+
+          <varlistentry>
+            <term><literal>on</literal></term>
+            <term><literal>off</literal></term>
+            <listitem>
+              <para>The kernel command line option
+              <varname>systemd.factory_reset=</varname> (or
+              <varname>systemd.factory-reset=</varname>) is set to true or false;
+              the option without a value means true. If it is not set, the
+              state is <literal>on</literal> if the
+              <varname>FactoryResetRequest-8cf2644b-4b0b-428f-9387-6d876050dc67</varname>
+              EFI variable requests a factory reset for this boot: it holds a
+              JSON object whose <varname>osReleaseId</varname> and
+              <varname>osReleaseImageId</varname> members match
+              <varname>ID=</varname> and <varname>IMAGE_ID=</varname> of
+              <filename>/etc/os-release</filename> (or
+              <filename>/usr/lib/os-release</filename>, or the file that
+              <varname>$SYSTEMD_OS_RELEASE</varname> names), and whose
+              <varname>bootId</varname> member differs from the current boot ID
+              (<filename>/proc/sys/kernel/random/boot_id</filename>).</para>
+            </listitem>
+          </varlistentry>
+
+          <varlistentry>
+            <term><literal>pending</literal></term>
+            <listitem>
+              <para>The EFI variable requests a factory reset for the next boot:
+              its <varname>bootId</varname> is the current boot ID.</para>
+            </listitem>
+          </varlistentry>
+
+          <varlistentry>
+            <term><literal>unspecified</literal></term>
+            <listitem>
+              <para>None of the above: the system was not booted with EFI, or the
+              EFI variable is not set, not valid, or meant for another operating
+              system.</para>
+            </listitem>
+          </varlistentry>
+        </variablelist>
+
+        <para>The checks are done in the order listed. If the state cannot be
+        determined, e.g. because <varname>systemd.factory_reset=</varname> has a
+        value that is not a boolean or os-release cannot be read, the property is
+        not set.</para>
+      </refsect2>
+
+      <refsect2><title>tpm2_id</title>
+        <para><command>tpm2_id identify</command>, which
+        <filename>60-tpm2-id.rules</filename> runs on
+        <filename>/dev/tpmrm</filename><replaceable>N</replaceable>, identifies
+        TPM 2.0 chips. Like systemd, it starts up the TPM if the firmware has not
+        done so, and only identifies TPMs that support AES-128 in CFB mode,
+        which systemd requires for session encryption; other TPMs are skipped
+        without an error. It talks to the TPM through the kernel's device node
+        and needs no TPM libraries. It sets:</para>
+
+        <variablelist>
+          <varlistentry>
+            <term><varname>ID_TPM2_MANUFACTURER=</varname></term>
+            <term><varname>ID_TPM2_VENDOR_STRING=</varname></term>
+            <listitem>
+              <para>The manufacturer code and the vendor string that the TPM
+              reports, with whitespace, control characters and non-ASCII bytes
+              replaced by <literal>_</literal>.</para>
+            </listitem>
+          </varlistentry>
+
+          <varlistentry>
+            <term><varname>ID_TPM2_MODALIAS=</varname></term>
+            <listitem>
+              <para>A string that describes the TPM for hwdb lookups. It lists the
+              family indicator (<literal>fi</literal>), level
+              (<literal>lv</literal>), revision (<literal>rv</literal>), year
+              (<literal>sy</literal>) and day of year (<literal>sd</literal>) of the
+              specification, the manufacturer (<literal>mf</literal>), the vendor
+              string (<literal>vs</literal>), the vendor TPM type in hexadecimal
+              (<literal>ty</literal>) and the firmware version
+              (<literal>fw</literal>), each after its two letter code and followed by
+              a colon, e.g.
+              <literal>fi2.0:&#x200B;lv0:&#x200B;rv1.16:&#x200B;sy2019:&#x200B;sd346:&#x200B;mfSTM:&#x200B;vsST33HTPHAHD8:&#x200B;ty1:&#x200B;fw73.4.65536:</literal>.
+              <filename>60-tpm2-id.rules</filename> looks up
+              <literal>tpm2:</literal> followed by it in the hwdb;
+              <filename>60-tpm2.hwdb</filename> sets
+              <varname>TPM2_BROKEN_NVPCR=1</varname> on TPMs on which the NV index
+              based PCRs of systemd do not work.</para>
+            </listitem>
+          </varlistentry>
+        </variablelist>
+
+        <para>This builtin and <filename>60-tpm2-id.rules</filename> are left out
+        when eudev is built with <option>--disable-tpm2</option>; a rule line that
+        uses the builtin, or runs a program named <command>tpm2_id</command> with
+        <varname>PROGRAM</varname> or <varname>RUN</varname>, is then ignored with an error
+        message saying so.</para>
+      </refsect2>
+  </refsect1>
+
+  <refsect1 id="net-naming"><title>Network Interface Naming</title>
+      <para>For network interfaces, the <command>net_id</command> builtin, which
+      is imported by <filename>75-net-description.rules</filename>, generates
+      predictable names from firmware information, from the location of the
+      device on its bus, and from its MAC address, and exports them as device
+      properties. Depending on the <varname>net.ifnames=</varname> kernel command
+      line option (see <citerefentry><refentrytitle>udevd</refentrytitle>
+      <manvolnum>8</manvolnum></citerefentry>),
+      <filename>80-net-name-slot.rules</filename> renames the interface to the
+      first one of <varname>ID_NET_NAME_FROM_DATABASE</varname>,
+      <varname>ID_NET_NAME_ONBOARD</varname>,
+      <varname>ID_NET_NAME_SLOT</varname>, <varname>ID_NET_NAME_PATH</varname> and
+      <varname>ID_NET_NAME_MAC</varname> that is a valid interface name (see
+      <varname>NAME</varname>), e.g. not longer than 15 characters, as systemd
+      does, unless an earlier rule assigned
+      <varname>NAME=</varname>. This is the order of the default
+      <varname>NamePolicy=</varname> of systemd, which however does not use
+      <varname>ID_NET_NAME_MAC</varname>. Like its <literal>keep</literal> and
+      <literal>kernel</literal> policies, the interface is not renamed when
+      its name was given by userspace, i.e. when it was created with a name
+      or was already renamed, or when the kernel says it named it
+      predictably, i.e. when the <filename>name_assign_type</filename>
+      attribute of the interface is 3 (<constant>NET_NAME_USER</constant>),
+      4 (<constant>NET_NAME_RENAMED</constant>) or 2
+      (<constant>NET_NAME_PREDICTABLE</constant>).
+      <varname>ID_NET_NAME_FROM_DATABASE</varname> is not set by
+      <command>net_id</command>, but by the hwdb, e.g. to
+      <literal>idrac</literal> for the virtual USB network interface of Dell
+      iDRAC by <filename>20-net-ifname.hwdb</filename>, which
+      <filename>75-net-description.rules</filename> imports for USB and PCI
+      devices.</para>
+
+      <para>By default, <filename>80-net-name-slot.rules</filename> renames
+      interfaces unless the kernel command line has
+      <varname>net.ifnames=0</varname>. When eudev is built with
+      <option>--with-net-ifnames-default=no</option>, interfaces keep the names
+      the kernel gave them unless the kernel command line has
+      <varname>net.ifnames=1</varname>. When eudev is built with
+      <option>--enable-rule-generator</option>, the rule generator keeps the
+      names that the kernel gave the interfaces from one boot to the next (see
+      <xref linkend="rule-generator"/>): by default, it replaces
+      <filename>80-net-name-slot.rules</filename>, which is not installed, and
+      <varname>net.ifnames=</varname> changes nothing; when eudev is also built
+      with <option>--with-net-ifnames-default=no</option>,
+      <filename>80-net-name-slot.rules</filename> is installed, and with
+      <varname>net.ifnames=1</varname> the rule generator does nothing.</para>
+
+      <para><filename>80-net-altnames.rules</filename> requests
+      <varname>OPTIONS+="net_altnames"</varname>, so that these names, except
+      the one the interface is renamed to, are also assigned as alternative
+      names of the interface, also the ones longer than 15 characters, like
+      systemd does by default. That is independent of
+      <varname>net.ifnames=</varname>, unless eudev is built with
+      <option>--with-net-ifnames-default=no</option>: then it is only done with
+      <varname>net.ifnames=1</varname>, like the renaming. It is also done for
+      interfaces that are not renamed, and with the rule generator.
+      The alternative names are shown by e.g. <command>ip link show</command>,
+      and can be used instead of the interface name by <command>ip</command>
+      and other tools. This can be disabled with
+      <varname>net_altnames=no</varname> in
+      <citerefentry><refentrytitle>udev.conf</refentrytitle><manvolnum>5</manvolnum></citerefentry>.</para>
+
+      <para>All names start with a two character prefix for the type of the
+      interface: <literal>en</literal> for Ethernet, <literal>ib</literal> for
+      InfiniBand, <literal>sl</literal> for serial line IP (slip),
+      <literal>wl</literal> for wireless LAN, <literal>ww</literal> for wireless
+      WAN and <literal>mc</literal> for MCTP. Names that do not fit into the 15
+      characters of an interface name are exported as well, up to 127
+      characters, but <filename>80-net-name-slot.rules</filename> does not
+      rename the interface to them. The following properties are set:</para>
+
+      <variablelist>
+        <varlistentry>
+          <term><varname>ID_NET_NAMING_SCHEME=</varname></term>
+          <listitem>
+            <para>The naming scheme the names were generated with, see
+            below.</para>
+          </listitem>
+        </varlistentry>
+
+        <varlistentry>
+          <term><varname>ID_NET_NAME_ONBOARD=</varname><replaceable>prefix</replaceable><literal>o</literal><replaceable>index</replaceable>[<replaceable>port</replaceable>][<replaceable>suffix</replaceable>]</term>
+          <term><varname>ID_NET_NAME_ONBOARD=</varname><replaceable>prefix</replaceable><literal>d</literal><replaceable>index</replaceable></term>
+          <listitem>
+            <para>The index number the firmware provides for an on-board
+            PCI device (ACPI <literal>_DSM</literal> or SMBIOS type 41), or
+            the index of the DeviceTree alias (<literal>ethernet</literal><replaceable>N</replaceable>,
+            <literal>wifi</literal><replaceable>N</replaceable>) of the
+            device.</para>
+          </listitem>
+        </varlistentry>
+
+        <varlistentry>
+          <term><varname>ID_NET_LABEL_ONBOARD=</varname><replaceable>label</replaceable></term>
+          <listitem>
+            <para>The label the firmware provides for an on-board PCI device.
+            It is not used as an interface name.</para>
+          </listitem>
+        </varlistentry>
+
+        <varlistentry>
+          <term><varname>ID_NET_NAME_SLOT=</varname><replaceable>prefix</replaceable>[<literal>P</literal><replaceable>domain</replaceable>]<literal>s</literal><replaceable>slot</replaceable>[<literal>f</literal><replaceable>function</replaceable>][<replaceable>port</replaceable>][<replaceable>suffix</replaceable>]</term>
+          <term><varname>ID_NET_NAME_SLOT=</varname><replaceable>prefix</replaceable><literal>v</literal><replaceable>slot</replaceable></term>
+          <term><varname>ID_NET_NAME_SLOT=</varname><replaceable>prefix</replaceable><literal>X</literal><replaceable>number</replaceable></term>
+          <listitem>
+            <para>The PCI slot number of the device, as provided by the
+            firmware; the IBM PowerVM VIO slot number; the Xen netfront VIF
+            number.</para>
+          </listitem>
+        </varlistentry>
+
+        <varlistentry>
+          <term><varname>ID_NET_NAME_PATH=</varname><replaceable>prefix</replaceable>[<literal>P</literal><replaceable>domain</replaceable>]<literal>p</literal><replaceable>bus</replaceable><literal>s</literal><replaceable>slot</replaceable>[<literal>f</literal><replaceable>function</replaceable>][<replaceable>port</replaceable>][<replaceable>suffix</replaceable>]</term>
+          <term><varname>ID_NET_NAME_PATH=</varname>&#x200B;<replaceable>prefix</replaceable><literal>c</literal><replaceable>bus_id</replaceable></term>
+          <term><varname>ID_NET_NAME_PATH=</varname>&#x200B;<replaceable>prefix</replaceable><literal>a</literal><replaceable>vendor</replaceable><replaceable>model</replaceable><literal>i</literal><replaceable>instance</replaceable></term>
+          <term><varname>ID_NET_NAME_PATH=</varname>&#x200B;<replaceable>prefix</replaceable><literal>i</literal><replaceable>address</replaceable><literal>n</literal><replaceable>port_name</replaceable></term>
+          <term><varname>ID_NET_NAME_PATH=</varname>&#x200B;<replaceable>prefix</replaceable><literal>u</literal><replaceable>port</replaceable>...</term>
+          <listitem>
+            <para>The location of the device: the PCI bus, slot and function
+            numbers; the bus ID of an s390 CCW device, without leading zeros;
+            the ACPI name of an ARM64 platform device; the address and port
+            name of a netdevsim device; the port chain of a USB device on a
+            USB host controller that is not a PCI device.</para>
+          </listitem>
+        </varlistentry>
+
+        <varlistentry>
+          <term><varname>ID_NET_NAME_MAC=</varname><replaceable>prefix</replaceable><literal>x</literal><replaceable>AABBCCDDEEFF</replaceable></term>
+          <listitem>
+            <para>The permanent MAC address of the device. As in systemd since
+            version 250, it is also set for an address of all zeros, except in
+            the <literal>eudev</literal> scheme, but such a name, e.g.
+            <literal>enx000000000000</literal>, is not unique, and
+            <filename>80-net-name-slot.rules</filename> never renames an
+            interface to it.</para>
+          </listitem>
+        </varlistentry>
+      </variablelist>
+
+      <para>The parts of the PCI based names are:</para>
+
+      <variablelist>
+        <varlistentry>
+          <term><literal>P</literal><replaceable>domain</replaceable></term>
+          <listitem>
+            <para>The PCI domain, only when it is not 0, or as the
+            <varname>ID_NET_NAME_INCLUDE_DOMAIN=</varname> property of the
+            PCI device says. It is left out of slot names when the slot of an
+            s390 PCI device is found by its <filename>function_id</filename>.</para>
+          </listitem>
+        </varlistentry>
+        <varlistentry>
+          <term><literal>f</literal><replaceable>function</replaceable></term>
+          <listitem>
+            <para>The PCI function; for multi-function devices also for
+            function 0. With ARI, the full 8-bit function number.</para>
+          </listitem>
+        </varlistentry>
+        <varlistentry>
+          <term><literal>n</literal><replaceable>phys_port_name</replaceable>, <literal>d</literal><replaceable>dev_port</replaceable></term>
+          <listitem>
+            <para>The port name or, when there is none, the port number of
+            one of several ports of a single PCI function.</para>
+          </listitem>
+        </varlistentry>
+        <varlistentry>
+          <term><literal>r</literal><replaceable>number</replaceable></term>
+          <listitem>
+            <para>An SR-IOV virtual function representor, named after the
+            physical function, with the number of the virtual function
+            instead of the port.</para>
+          </listitem>
+        </varlistentry>
+        <varlistentry>
+          <term><literal>v</literal><replaceable>number</replaceable></term>
+          <listitem>
+            <para>An SR-IOV virtual function, named after its physical
+            function.</para>
+          </listitem>
+        </varlistentry>
+        <varlistentry>
+          <term><literal>S</literal><replaceable>sfnum</replaceable></term>
+          <listitem>
+            <para>An auxiliary sub-function (e.g. of mlx5_core), named after
+            its PCI function.</para>
+          </listitem>
+        </varlistentry>
+        <varlistentry>
+          <term><literal>u</literal><replaceable>port</replaceable>...[<literal>c</literal><replaceable>config</replaceable>][<literal>i</literal><replaceable>interface</replaceable>]</term>
+          <listitem>
+            <para>A USB device: the chain of hub port numbers, the
+            configuration unless it is 1 and the interface unless it is
+            0.</para>
+          </listitem>
+        </varlistentry>
+        <varlistentry>
+          <term><literal>b</literal><replaceable>number</replaceable></term>
+          <listitem>
+            <para>A Broadcom bus (BCMA) core, unless it is 0.</para>
+          </listitem>
+        </varlistentry>
+      </variablelist>
+
+      <refsect2><title>Naming schemes</title>
+        <para>New versions add new kinds of names and improve existing ones, which
+        changes the names of some devices. The naming logic of the
+        <command>net_id</command> builtin of a given version is called a naming
+        scheme, and it can be selected with
+        <varname>net_naming_scheme=</varname> in
+        <citerefentry><refentrytitle>udev.conf</refentrytitle><manvolnum>5</manvolnum></citerefentry>
+        or <varname>net.naming_scheme=</varname> on the kernel command line (see
+        <citerefentry><refentrytitle>udevd</refentrytitle><manvolnum>8</manvolnum></citerefentry>),
+        which takes precedence, to keep the names stable. The environment variable
+        <varname>$NET_NAMING_SCHEME</varname> may also be used, e.g. to preview
+        the names with <command>udevadm test-builtin net_id</command>; it
+        takes precedence over both, unless it is prefixed with
+        <literal>:</literal>. The schemes <literal>v238</literal> and
+        later are the ones of systemd and generate the same names as systemd
+        does. The default is
+        <literal>latest</literal>. Unknown names are ignored with a warning, and
+        the next setting in the order above is used.</para>
+
+        <para>A naming scheme selects only the names that
+        <command>net_id</command> generates, i.e. the
+        <varname>ID_NET_NAME_*</varname> properties. Which one of them an
+        interface is renamed to is decided by
+        <filename>80-net-name-slot.rules</filename> as described above, the
+        same way with all schemes, e.g. <varname>ID_NET_NAME_FROM_DATABASE</varname>
+        is preferred, and interfaces named by userspace or predictably by the
+        kernel are not renamed, also with the <literal>eudev</literal> scheme,
+        which eudev 3.2.15 did not do. The following schemes are defined:</para>
+
+        <variablelist>
+          <varlistentry>
+            <term><literal>eudev</literal></term>
+            <listitem>
+              <para>The names generated by the <command>net_id</command>
+              builtin of eudev 3.2.15 and older, which are based on those of
+              systemd 220.</para>
+            </listitem>
+          </varlistentry>
+
+          <varlistentry>
+            <term><literal>v238</literal></term>
+            <listitem>
+              <para>The naming of systemd 238. Compared to
+              <literal>eudev</literal>: virtio network devices are named
+              after their PCI or CCW device; onboard indexes above 16383 are
+              ignored; the port name (<literal>n</literal><replaceable>phys_port_name</replaceable>)
+              is preferred over the port number; the names of s390 CCW devices
+              are <literal>enc</literal><replaceable>bus_id</replaceable>
+              without leading zeros, instead of <literal>enccw</literal><replaceable>bus_id</replaceable>;
+              IBM PowerVM VIO and ARM64 ACPI platform devices are named; the
+              hotplug slot of a parent PCI device is used when the device has
+              none, and slot names with leading zeros, like those of s390, are
+              parsed as octal numbers; <varname>ID_NET_LABEL_ONBOARD</varname>
+              is also set for devices without an onboard index; and the
+              <varname>ID_NET_NAME_ALLOW</varname> and
+              <varname>ID_NET_NAME_INCLUDE_DOMAIN</varname> properties are
+              used.</para>
+            </listitem>
+          </varlistentry>
+
+          <varlistentry>
+            <term><literal>v239</literal></term>
+            <listitem>
+              <para>SR-IOV virtual functions are named after their physical
+              function with a <literal>v</literal><replaceable>number</replaceable>
+              suffix. Devices using ARI (e.g. NPAR partitions) use the full
+              function number.</para>
+            </listitem>
+          </varlistentry>
+
+          <varlistentry>
+            <term><literal>v240</literal></term>
+            <listitem>
+              <para>InfiniBand devices get names with the <literal>ib</literal>
+              prefix. An onboard index of 0 is used.</para>
+            </listitem>
+          </varlistentry>
+
+          <varlistentry>
+            <term><literal>v241</literal></term>
+            <listitem>
+              <para>Same names as <literal>v240</literal>.</para>
+            </listitem>
+          </varlistentry>
+
+          <varlistentry>
+            <term><literal>v243</literal></term>
+            <listitem>
+              <para>netdevsim devices are named.
+              <varname>ID_NET_LABEL_ONBOARD</varname> is not prefixed with the
+              interface type anymore.</para>
+            </listitem>
+          </varlistentry>
+
+          <varlistentry>
+            <term><literal>v245</literal></term>
+            <listitem>
+              <para>Same names as <literal>v243</literal>.</para>
+            </listitem>
+          </varlistentry>
+
+          <varlistentry>
+            <term><literal>v247</literal></term>
+            <listitem>
+              <para><varname>ID_NET_NAME_SLOT</varname> is not set when the slot
+              belongs to a PCI bridge, as all devices behind it would get the
+              same name.</para>
+            </listitem>
+          </varlistentry>
+
+          <varlistentry>
+            <term><literal>v249</literal></term>
+            <listitem>
+              <para>The slots of s390 PCI devices are found by their
+              <filename>function_id</filename>. Onboard indexes up to 65535
+              are used.</para>
+            </listitem>
+          </varlistentry>
+
+          <varlistentry>
+            <term><literal>v250</literal></term>
+            <listitem>
+              <para>Xen netfront devices are named.</para>
+            </listitem>
+          </varlistentry>
+
+          <varlistentry>
+            <term><literal>v251</literal></term>
+            <listitem>
+              <para>The slot of a PCI bridge is used again for
+              multi-function devices behind it. This is reverted in
+              <literal>v255</literal>.</para>
+            </listitem>
+          </varlistentry>
+
+          <varlistentry>
+            <term><literal>v252</literal></term>
+            <listitem>
+              <para>Devices with a DeviceTree <literal>ethernet</literal><replaceable>N</replaceable>
+              alias are named.</para>
+            </listitem>
+          </varlistentry>
+
+          <varlistentry>
+            <term><literal>v253</literal></term>
+            <listitem>
+              <para>USB devices on a USB host controller that is not a PCI
+              device are named.</para>
+            </listitem>
+          </varlistentry>
+
+          <varlistentry>
+            <term><literal>v254</literal></term>
+            <listitem>
+              <para>SR-IOV virtual function representors are named with an
+              <literal>r</literal><replaceable>number</replaceable> suffix
+              instead of their port name.</para>
+            </listitem>
+          </varlistentry>
+
+          <varlistentry>
+            <term><literal>v255</literal></term>
+            <listitem>
+              <para>The change of <literal>v251</literal> is reverted.</para>
+            </listitem>
+          </varlistentry>
+
+          <varlistentry>
+            <term><literal>v257</literal></term>
+            <listitem>
+              <para>The PCI slot is read from
+              <filename>firmware_node/sun</filename>. The DeviceTree alias
+              of the network interface itself is preferred over the one of its
+              parent device.</para>
+            </listitem>
+          </varlistentry>
+
+          <varlistentry>
+            <term><literal>v258</literal></term>
+            <listitem>
+              <para>Same names as <literal>v257</literal>.</para>
+            </listitem>
+          </varlistentry>
+
+          <varlistentry>
+            <term><literal>v259</literal></term>
+            <listitem>
+              <para>WLAN devices with a DeviceTree <literal>wifi</literal><replaceable>N</replaceable>
+              or <literal>ethernet</literal><replaceable>N</replaceable> alias
+              are named.</para>
+            </listitem>
+          </varlistentry>
+
+          <varlistentry>
+            <term><literal>v260</literal></term>
+            <listitem>
+              <para>MCTP devices are named, with the <literal>mc</literal>
+              prefix.</para>
+            </listitem>
+          </varlistentry>
+
+          <varlistentry>
+            <term><literal>v261</literal></term>
+            <listitem>
+              <para>Auxiliary sub-functions are named after their PCI function
+              with an <literal>S</literal><replaceable>sfnum</replaceable>
+              suffix.</para>
+            </listitem>
+          </varlistentry>
+
+          <varlistentry>
+            <term><literal>latest</literal></term>
+            <listitem>
+              <para>The latest scheme, currently <literal>v261</literal>.</para>
+            </listitem>
+          </varlistentry>
+        </variablelist>
+
+        <para>Note that a naming scheme only fixes the rules; the names may still
+        change when a new kernel version exposes more information, e.g. a
+        <filename>phys_port_name</filename> attribute.</para>
+      </refsect2>
+
+      <refsect2><title>Limiting the use of sysfs attributes</title>
+        <para>With the systemd naming schemes, the sysfs attributes used for a
+        name can be restricted with properties of the device the attribute
+        belongs to. <varname>ID_NET_NAME_ALLOW=0</varname> disallows all
+        attributes that are not explicitly allowed, and
+        <varname>ID_NET_NAME_ALLOW_</varname><replaceable>ATTRIBUTE</replaceable><varname>=</varname>
+        allows (1) or disallows (0) a specific attribute, e.g.
+        <varname>ID_NET_NAME_ALLOW_PHYS_PORT_NAME=0</varname>. For network
+        interfaces, such properties are usually set in the hwdb, where
+        <filename>75-net-description.rules</filename> looks them up with the
+        key <literal>net:naming:dr</literal><replaceable>driver</replaceable><literal>:</literal>,
+        for example:</para>
+
+        <programlisting># /etc/udev/hwdb.d/50-net-naming-denylist.hwdb
+net:naming:drvirtio_net:*
+ ID_NET_NAME_ALLOW_PHYS_PORT_NAME=0</programlisting>
+      </refsect2>
+
+      <refsect2 id="rule-generator"><title>The rule generator</title>
+        <para>When eudev is built with <option>--enable-rule-generator</option>,
+        <filename>75-persistent-net-generator.rules</filename> keeps the names that
+        the kernel gives network interfaces, e.g. <literal>eth0</literal>, from one
+        boot to the next, also when the kernel finds the interfaces in another
+        order: the first time an interface appears, its program
+        <command>write_net_rules</command> writes a rule with the name of the
+        interface to <filename>/etc/udev/rules.d/70-persistent-net.rules</filename>,
+        which gives the interface that name on the next boots. When a rule there
+        gives that name to another interface already, the rule gets the name with
+        the next number after the highest one there, e.g. <literal>eth1</literal>,
+        and the interface is renamed to it at once. The rule matches the MAC
+        address of the interface, its type and its <filename>dev_id</filename>
+        attribute, and for S/390 devices their bus id and driver instead, never only
+        its type and kernel name. Only interfaces that the kernel named by
+        enumeration get a rule, i.e. whose <filename>name_assign_type</filename>
+        attribute is 1 (<constant>NET_NAME_ENUM</constant>) or cannot be read, as on
+        kernels before 3.17, which do not have it, and whose names are
+        <literal>eth*</literal>, <literal>wlan*</literal> or a few other kernel
+        names, and only when they have a driver, unlike e.g. bridges and VLANs, and
+        no name from an earlier rule; not the interfaces of Xen and User-mode Linux,
+        the monitor interfaces of wireless devices, and the ones whose MAC address is
+        locally administered (except the addresses of some vendors that do not
+        follow that scheme), all zeros, or one of a virtual machine, e.g. of KVM,
+        QEMU, VMware, Hyper-V, VirtualBox or Xen. The prefixes listed for Microsoft
+        Azure are registered to Microsoft, not only for Azure, so interfaces of
+        Microsoft hardware with such an address get no rule either; 54:52:00, which
+        is registered to no one, is listed for the guests that old versions of
+        libvirt created with it, which keep their addresses. The rules may be edited, keeping each rule on one line and changing only the value of
+        <varname>NAME</varname>, and when the file is removed, the current names are
+        recorded again. When
+        <filename>/etc/udev/rules.d</filename> cannot be written, e.g. as the root
+        file system is still read-only, the rules are written to
+        <filename>/run/udev/tmp-rules--70-persistent-net.rules</filename> instead,
+        which eudev does not copy: the system has to add that file to
+        <filename>70-persistent-net.rules</filename> later during the boot, e.g.
+        with an init script. <command>write_net_rules</command> logs a warning when
+        it writes no rule: "no MAC address or bus id to match
+        <replaceable>interface</replaceable> with, writing no rule", when neither the
+        address nor a bus id can be used, e.g. for a name requested with
+        <varname>INTERFACE_NAME</varname>, and "Cannot lock
+        <replaceable>file</replaceable>!", when it gives up after waiting 30 seconds
+        for the lock of the rules file; it writes them to its standard error,
+        which <command>udevd</command> logs at the debug level, and, when
+        <filename>/dev/kmsg</filename> can be written, to the kernel log at the
+        warning level, as <literal>write_net_rules[<replaceable>pid</replaceable>]</literal>.</para>
+
+        <para>Network interfaces then also swap their names, e.g. when the kernel
+        finds them in another order than the rules expect, or after the names in
+        the rules were swapped: when an interface is to get a new name, and a rule
+        gives its current name to another interface, <command>udevd</command> first
+        renames it to a temporary name, with a number derived from its interface
+        index instead of its own, e.g.
+        <literal>eth126</literal>, so that the other interface can get the name;
+        when the name that an interface is to get is taken, it renames the
+        interface to
+        <literal>rename_<replaceable>name</replaceable></literal>, or
+        <literal>rename<replaceable>index</replaceable></literal> when that is
+        longer than 15 characters, and waits up to 90 seconds, but not beyond the
+        event timeout (see
+        <citerefentry><refentrytitle>udevd</refentrytitle><manvolnum>8</manvolnum></citerefentry>),
+        for the name to become free, and renames it back to its old name when it
+        does not. It skips that, or stops waiting, as soon as
+        <command>udevd</command> has handled the add event of the interface that
+        has the name: as only add events rename an interface, that one keeps it. An
+        interface that gets no new name, e.g. one of a virtual machine, keeps its
+        name, also when a rule gives that to another interface, e.g. a stale rule
+        of a card that was replaced: the other interface then keeps its own name,
+        and waits only while the add event of the one that has the name is queued
+        or running, or when <command>udevd</command> has not handled it, e.g. as
+        it was not triggered.</para>
+
+        <para>By default, the rule generator replaces
+        <filename>80-net-name-slot.rules</filename>, which is not installed, so
+        <varname>net.ifnames=</varname> on the kernel command line changes nothing.
+        When eudev is also built with <option>--with-net-ifnames-default=no</option>,
+        <filename>80-net-name-slot.rules</filename> is installed, and with
+        <varname>net.ifnames=1</varname> the rule generator records no names: then
+        the interfaces get their predictable names, except the ones that
+        <filename>70-persistent-net.rules</filename> names already, as it comes
+        first. The alternative names are assigned as without the rule generator.
+        <command>udevadm test</command> does not run
+        <command>write_net_rules</command>.</para>
+      </refsect2>
+  </refsect1>
+
+  <refsect1><title>Hardware Database Files</title>
+      <para>The hwdb files are read from the files located in the
+      system hwdb directory <filename>/usr/lib/udev/hwdb.d</filename>,
+      the local administration directory <filename>/etc/udev/hwdb.d</filename>,
+      and any other directory in the <envar>UDEV_HWDB_PATH</envar> search path
+      variable. All hwdb files are collectively sorted and processed in
+      lexical order, regardless of the directories in which they live. However,
+      files with identical filenames replace each other. Files in
+      <filename>/etc</filename> have the highest priority, then files in
+      <filename>/usr/lib</filename>, and the ones in
+      <envar>UDEV_HWDB_PATH</envar> come last. Files with higher priority
+      take precedence over files with the same name and lower priority.
+      This order can be used to override a system-supplied hwdb file with a
+      local file if needed; a symlink in <filename>/etc</filename> with the
+      same name as a hwdb file in <filename>/usr/lib</filename> or
+      <envar>UDEV_HWDB_PATH</envar>, pointing to
+      <filename>/dev/null</filename>, or an empty file with that name,
+      disables the hwdb file entirely. hwdb
+      files must have the extension <filename>.hwdb</filename>; other
+      extensions are ignored.</para>
+
+      <para>The hwdb file contains data records consisting of matches and
+      associated key-value pairs. Every record in the hwdb starts with one or
+      more match string, specifying a shell glob to compare the database
+      lookup string against. Multiple match lines are specified in additional
+      consecutive lines. Every match line is compared individually, they are
+      combined by OR. Every match line must start at the first character of
+      the line.</para>
+
+      <para>The match lines are followed by one or more key-value pair lines, which
+      are recognized by a leading space character. The key name and value are separated
+      by <literal>=</literal>. An empty line signifies the end
+      of a record. Lines beginning with <literal>#</literal> are ignored.</para>
+
+      <para>The content of all hwdb files is read by <citerefentry>
+      <refentrytitle>udevadm</refentrytitle><manvolnum>8</manvolnum>
+      </citerefentry> and compiled to a binary database located at
+      <filename>/etc/udev/hwdb.bin</filename>, or alternatively
+      <filename>/usr/lib/udev/hwdb.bin</filename>, if you want to ship the
+      compiled database in an immutable image by using <option>--usr</option>,
+      or anywhere on the system by using <option>--output</option>.
+      If <envar>UDEV_HWDB_BIN</envar> is set at run-time, and its value
+      identifies a file in the file system, then the binary database located
+      under this name will be used. During runtime only the binary database is
+      used.</para>
+  </refsect1>
+
+  <refsect1>
+    <title>See Also</title>
+    <para>
+      <citerefentry>
+        <refentrytitle>udevd</refentrytitle><manvolnum>8</manvolnum>
+      </citerefentry>,
+      <citerefentry>
+        <refentrytitle>udevadm</refentrytitle><manvolnum>8</manvolnum>
+    </citerefentry></para>
+  </refsect1>
+</refentry>

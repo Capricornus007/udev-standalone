@@ -1,9 +1,0 @@
-# milestone 6 demo: PROGRAM capture, IMPORT{program}, RUN, and GOTO/LABEL control flow
-# (each logical rule is on one line; the parser does not do \ line-continuation)
-
-SUBSYSTEM=="input", PROGRAM="/bin/echo captured-value", IMPORT{program}="/bin/echo IMPORTED_VAR=hello", RUN+="/bin/echo would-run", TAG+="uaccess"
-
-# GOTO/LABEL: when this matches, jump past the rule below so its TAG is skipped
-SUBSYSTEM=="input", GOTO="end"
-SUBSYSTEM=="input", TAG+="skipped-by-goto"
-SUBSYSTEM=="input", LABEL="end"

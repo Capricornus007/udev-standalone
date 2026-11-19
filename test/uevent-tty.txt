@@ -1,7 +1,0 @@
-add@/devices/virtual/tty/ttyS0
-ACTION=add
-DEVPATH=/devices/virtual/tty/ttyS0
-SUBSYSTEM=tty
-DEVNAME=ttyS0
-MAJOR=4
-MINOR=64

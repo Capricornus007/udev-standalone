@@ -1,0 +1,139 @@
+/*-*- Mode: C; c-basic-offset: 8; indent-tabs-mode: nil -*-*/
+
+/***
+  This file is part of udev.
+
+  Copyright 2010 Lennart Poettering
+
+  udev is free software; you can redistribute it and/or modify it
+  under the terms of the GNU Lesser General Public License as published by
+  the Free Software Foundation; either version 2.1 of the License, or
+  (at your option) any later version.
+
+  udev is distributed in the hope that it will be useful, but
+  WITHOUT ANY WARRANTY; without even the implied warranty of
+  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
+  Lesser General Public License for more details.
+
+  You should have received a copy of the GNU Lesser General Public License
+  along with systemd; If not, see <http://www.gnu.org/licenses/>.
+***/
+
+#include <stdlib.h>
+#include <stdbool.h>
+#include <errno.h>
+#include <string.h>
+#include <stdio.h>
+#include <limits.h>
+#include <getopt.h>
+#include <fcntl.h>
+#include <sys/stat.h>
+
+#include "log.h"
+#include "util.h"
+#include "fileio.h"
+#include "path-util.h"
+#include "sysctl-util.h"
+#include "utf8.h"
+
+char *sysctl_normalize(char *s) {
+        char *n;
+
+        n = strpbrk(s, "/.");
+
+        /* If the first separator is a slash, the path is
+         * assumed to be normalized and slashes remain slashes
+         * and dots remains dots. */
+
+        if (n && *n == '.')
+                /* Dots become slashes and slashes become dots. Fun. */
+                do {
+                        if (*n == '.')
+                                *n = '/';
+                        else
+                                *n = '.';
+
+                        n = strpbrk(n + 1, "/.");
+                } while (n);
+
+        path_simplify(s);
+
+        /* Kill the leading slash, but keep the first character of the string in the same place. */
+        if (*s == '/' && *(s+1))
+                memmove(s, s+1, strlen(s));
+
+        return s;
+}
+
+/* Like sysctl_write() of systemd, which writes the entry with write_string_file(). Unlike there, only a regular file
+ * is written, like sysctl_read() reads only regular files, and it is opened with O_NONBLOCK, so that a property
+ * that names something else, e.g. a FIFO, fails with EBADF instead of blocking. */
+int sysctl_write(const char *property, const char *value) {
+        _cleanup_fclose_ FILE *f = NULL;
+        _cleanup_close_ int fd = -1;
+        struct stat st;
+        char *p;
+
+        assert(property);
+        assert(value);
+
+        p = strjoina("/proc/sys/", property);
+
+        path_simplify(p);
+        if (!path_is_normalized(p))
+                return -EINVAL;
+
+        /* like the reference implementation, with the name and the value escaped like the values in the other messages, as they
+         * may be substituted values of a rule */
+        if (log_get_max_level() >= LOG_DEBUG) {
+                _cleanup_free_ char *escaped_p = utf8_escape_non_printable(p),
+                        *escaped_value = utf8_escape_non_printable(value);
+
+                log_debug("Setting '%s' to '%s'", escaped_p ?: p, escaped_value ?: value);
+        }
+
+        /* checked before it is opened too, so that e.g. a FIFO without a reader gives EBADF, not ENXIO */
+        if (stat(p, &st) < 0)
+                return -errno;
+        if (!S_ISREG(st.st_mode))
+                return -EBADF;
+
+        fd = open(p, O_WRONLY|O_NOCTTY|O_CLOEXEC|O_NONBLOCK);
+        if (fd < 0)
+                return -errno;
+        if (fstat(fd, &st) < 0)
+                return -errno;
+        if (!S_ISREG(st.st_mode))
+                return -EBADF;
+
+        f = fdopen(fd, "we");
+        if (!f)
+                return -errno;
+        fd = -1;
+
+        return write_string_stream(f, value);
+}
+
+/* Like sysctl_read() of systemd, which reads the entry with read_full_virtual_file(). Unlike there, the file is
+ * opened with O_NONBLOCK by read_virtual_file(), so that a property that names something else than a regular
+ * file fails with EBADF instead of blocking. */
+int sysctl_read(const char *property, char **content) {
+        char *p;
+        int r;
+
+        assert(property);
+
+        p = strjoina("/proc/sys/", property);
+
+        path_simplify(p);
+        if (!path_is_normalized(p)) /* Filter out attempts to write to /proc/sys/../../…, just in case */
+                return -EINVAL;
+
+        r = read_virtual_file(p, SIZE_MAX, content, NULL);
+        if (r < 0)
+                return r;
+        if (content)
+                delete_trailing_chars(*content, NEWLINE);
+
+        return 0;
+}
