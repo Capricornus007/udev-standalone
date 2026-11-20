@@ -1,0 +1,32 @@
+name: udev CI (znver3 -O3, zero systemd)
+on: [push, pull_request, workflow_dispatch]
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: deps
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq autoconf automake libtool pkg-config gperf libblkid-dev libkmod-dev
+      - name: zero systemd gate (source)
+        run: |
+          # 執行期路徑/檔名不得有 systemd；版權 forked-from 已在上游改寫
+          ! grep -rliE '/(etc|run|lib)/systemd/' --include='*.c' --include='*.h' . || { echo "systemd runtime path found"; exit 1; }
+          ! find . -iname '*systemd*' | grep -q . || { echo "systemd-named file found"; exit 1; }
+      - name: autoreconf + configure (znver3 -O3 -flto)
+        run: |
+          export CFLAGS="-march=znver3 -mtune=znver3 -O3 -pipe -flto -Wall -Wextra"
+          export LDFLAGS="-flto"
+          autoreconf -f -i -s
+          ./configure --prefix=/usr --sysconfdir=/etc --libdir=/usr/lib
+      - name: make -j4
+        run: make -j4
+      - name: verify
+        run: |
+          ./src/udev/udevadm --version | grep -q 262
+          ! ldd ./src/udev/udevadm | grep -qi systemd || { echo "libsystemd linked"; exit 1; }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: udev-znver3
+          path: |
+            src/udev/udevadm
+            src/udev/udevd
