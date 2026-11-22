@@ -4,7 +4,7 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: deps
         run: sudo apt-get update -qq && sudo apt-get install -y -qq autoconf automake libtool pkg-config gperf libblkid-dev libkmod-dev
       - name: zero systemd gate (source)
@@ -24,7 +24,7 @@ jobs:
         run: |
           ./src/udev/udevadm --version | grep -q 262
           ! ldd ./src/udev/udevadm | grep -qi systemd || { echo "libsystemd linked"; exit 1; }
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: udev-znver3
           path: |
